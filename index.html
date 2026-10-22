@@ -120,7 +120,7 @@ body.shake #scene{animation:shk .45s linear}
 
 <!-- ================= HUD ================= -->
 <div id="hud" class="hidden">
-  <div class="chip lvl"><span class="lbl">Сектор</span><span class="val" id="uiLevel">1/500</span></div>
+  <div class="chip lvl"><span class="lbl">Сектор</span><span class="val" id="uiLevel">1/100</span></div>
   <div class="chip mines"><span class="lbl">Мины</span><span class="val" id="uiMines">0</span></div>
   <div class="chip time"><span class="lbl">Время</span><span class="val" id="uiTime">0:00</span></div>
   <div class="chip" id="btnPause" title="Пауза"><span class="lbl">ESC</span><span class="val">II</span></div>
@@ -133,7 +133,7 @@ body.shake #scene{animation:shk .45s linear}
 <div class="overlay show" id="ovMenu">
   <div class="panel">
     <h1 class="logo glitchOnView">CYBER<span>SWEEP</span></h1>
-    <div class="tagline">// веб-протокол разминирования · 500 секторов //</div>
+    <div class="tagline">// веб-протокол разминирования · 100 секторов //</div>
     <div class="statgrid" id="menuStats"></div>
     <button class="btn mg" id="btnCampaign">▶ Кампания: сектор <span id="nextLvl">1</span></button>
     <div class="row">
@@ -152,9 +152,9 @@ body.shake #scene{animation:shk .45s linear}
   <div class="panel help">
     <h2 style="color:var(--cyan)">// Выбор сектора //</h2>
     <div style="margin:10px 0">Эон:
-      <button class="btn small yl eonBtn active" data-eon="0">I · 1–50</button>
-      <button class="btn small yl eonBtn" data-eon="1">II · 51–200</button>
-      <button class="btn small yl eonBtn" data-eon="2">III · 201–500</button>
+      <button class="btn small yl eonBtn active" data-eon="0">I · 1–20</button>
+      <button class="btn small yl eonBtn" data-eon="1">II · 21–50</button>
+      <button class="btn small yl eonBtn" data-eon="2">III · 51–100</button>
     </div>
     <div id="lvlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(56px,1fr));gap:6px"></div>
     <button class="btn" id="btnLevelsBack" style="margin-top:16px">◄ Назад</button>
@@ -187,7 +187,7 @@ body.shake #scene{animation:shk .45s linear}
     </ul>
     <h2>Кампания</h2>
     <ul>
-      <li>500 секторов, три эона сложности. Все поля построены детерминированным алгоритмом по единому зерну и проверены решаемыми <b>без угадывания</b>.</li>
+      <li>100 секторов, три эона сложности. С каждым уровнем сетка растёт, а плотность мин увеличивается. Все поля построены детерминированным алгоритмом по единому зерну и проверены решаемыми <b>без угадывания</b>.</li>
       <li>Стартовая зона каждого поля гарантированно открыта и безопасна.</li>
     </ul>
     <button class="btn" id="btnHelpBack" style="margin-top:16px">◄ Назад</button>
@@ -284,20 +284,23 @@ function neighbors(w,h,x,y){
   return out;
 }
 
-/* Конфигурация кампании: сетки 5×5→24×24, плотность 12%→28%. */
+const TOTAL_LEVELS=100; // всего секторов в кампании
+
+/* Конфигурация кампании: 100 секторов, сложность растёт КРУПНО с каждым
+   уровнем — и размер сетки (5×5 → 24×24), и плотность мин (~13% → ~30%). */
 function campaignConfig(L){
   let w,h,d;
-  if(L<=50){                       // ЭОН I: 5×5 … 9×9
-    w=h=5+Math.floor((L-1)/10);
-    d=Math.min(0.20,0.10+((L-1)%10)*0.004);
-  }else if(L<=200){                // ЭОН II: 9×9 … 15×15
-    const t=(L-51)/149;
-    w=h=9+Math.floor(t*6.999);
-    d=0.14+t*0.06;
-  }else{                           // ЭОН III: 16×16 … 24×24
-    const t=(L-201)/299;
-    w=h=16+Math.floor(t*8.999);
-    d=0.20+t*0.08;
+  if(L<=20){                        // ЭОН I: 5×5 … 9×9, мины 13%…17%
+    w=h=5+Math.floor((L-1)/4);      // каждые 4 уровня сетка +1 клетку
+    d=0.13+(L-1)*0.002;
+  }else if(L<=50){                  // ЭОН II: 10×10 … 15×15, мины 18%…23%
+    const t=(L-21)/29;
+    w=h=10+Math.round(t*5);         // рост каждый уровень
+    d=0.18+t*0.05;
+  }else{                            // ЭОН III: 16×16 … 24×24, мины 24%…30%
+    const t=(L-51)/49;
+    w=h=16+Math.round(t*8);
+    d=0.24+t*0.06;
   }
   w=Math.min(w,24);h=Math.min(h,24);
   let mines=Math.round(w*h*d);
@@ -604,7 +607,7 @@ class MinesGame{
 
 /* ============ [3] СТРУКТУРА ДАННЫХ КАМПАНИИ (сжатый JSON) ============
    Кампания хранится компактно: одно генетическое зерно + таблица
-   параметров всех 500 секторов. Полная конфигурация каждого уровня
+   параметров всех 100 секторов. Полная конфигурация каждого уровня
    (размер, число мин, позиции мин, стартовые открытые клетки)
    ВОССТАНАВЛИВАЕТСЯ из этой структуры детерминированным генератором
    и проверяется валидатором решаемости — без единого случайного бита. */
@@ -613,20 +616,20 @@ const CAMPAIGN_JSON=JSON.stringify({
   format:'CSW-LVL-1',
   seed:CAMPAIGN_SEED,
   validator:'R1-R4 CSP-solvability',
-  count:500,
+  count:TOTAL_LEVELS,
   epochs:[
-    {name:'ЭОН I',range:[1,50],note:'обучающие сети 5×5–9×9'},
-    {name:'ЭОН II',range:[51,200],note:'средние сети 9×9–15×15'},
-    {name:'ЭОН III',range:[201,500],note:'крупные сети 16×16–24×24'}
+    {name:'ЭОН I',range:[1,20],note:'обучающие сети 5×5–9×9'},
+    {name:'ЭОН II',range:[21,50],note:'средние сети 10×10–15×15'},
+    {name:'ЭОН III',range:[51,100],note:'крупные сети 16×16–24×24'}
   ],
-  table:Array.from({length:500},(_,i)=>{const c=campaignConfig(i+1);return [i+1,c.w,c.h,c.mines];})
+  table:Array.from({length:TOTAL_LEVELS},(_,i)=>{const c=campaignConfig(i+1);return [i+1,c.w,c.h,c.mines];})
 });
 // Пример чтения структуры (используется для экрана «О кампании» и отладки):
 const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return null;}})();
 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
-  key:'cybersweep_save_v1',
+  key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,glow:true,quality:true,perspective:true}};},
   load(){
     try{
@@ -640,6 +643,9 @@ const Store={
   reset(){SAVE=this.def();this.save();}
 };
 let SAVE=Store.load();
+/* Миграция из старых сохранений (500 уровней): не выпускаем за пределы 100 */
+if(SAVE.level>TOTAL_LEVELS)SAVE.level=TOTAL_LEVELS;
+if(SAVE.maxUnlocked>TOTAL_LEVELS)SAVE.maxUnlocked=TOTAL_LEVELS;
 const S=SAVE.settings;
 
 /* ================= [5] ЗВУК (WebAudio, синтез) ================= */
@@ -691,11 +697,9 @@ const App={
   dust:null
 };
 
-function layout(){
-  const W=innerWidth,H=innerHeight;
-  if(App.renderer){App.renderer.setSize(W,H);App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
-}
-addEventListener('resize',layout);
+/* layout() и applyCamera() определены ниже едиными версиями,
+   поддерживающими перспективную и ортографическую камеры. */
+addEventListener('resize',()=>layout());
 
 function initScene(){
   App.scene=new THREE.Scene();
@@ -871,15 +875,7 @@ function buildBoard(){
   applyCamera();
   syncTiles();
 }
-function applyCamera(){
-  const el=Math.max(0.18,App.camEl);
-  App.camera.position.set(
-    App.target.x+App.camDist*Math.sin(el)*Math.cos(App.camAz),
-    App.target.y+App.camDist*Math.cos(el),
-    App.target.z+App.camDist*Math.sin(el)*Math.sin(App.camAz)
-  );
-  App.camera.lookAt(App.target.x,App.target.y,App.target.z);
-}
+/* applyCamera — единая реализация ниже (раздел камеры) */
 
 /* --- GSAP-обёртки (с фолбэком, если CDN недоступен) --- */
 const T={
@@ -1099,7 +1095,7 @@ function setState(st){
 function fmtTime(s){const m=Math.floor(s/60);return m+':'+String(s%60).padStart(2,'0');}
 function refreshHud(){
   const g=App.game;if(!g)return;
-  $('uiLevel').textContent=g.levelId+'/500';
+  $('uiLevel').textContent=g.levelId+'/'+TOTAL_LEVELS;
   $('uiMines').textContent=String(Math.max(-99,g.mineCount-g.flags()));
   $('uiTime').textContent=fmtTime(App.time);
 }
@@ -1120,7 +1116,7 @@ function toast(msg){
 
 /* --- запуск уровня --- */
 function startLevel(L){
-  L=Math.max(1,Math.min(500,L));
+  L=Math.max(1,Math.min(TOTAL_LEVELS,L));
   let lv;
   try{lv=generateCampaignLevel(L);}
   catch(err){toast('ОШИБКА ГЕНЕРАЦИИ');return;}
@@ -1153,7 +1149,7 @@ function checkVictory(){
   SAVE.wins++;SAVE.totalTime+=App.time;
   const best=SAVE.best[g.levelId];
   if(!best||App.time<best)SAVE.best[g.levelId]=App.time;
-  if(g.levelId>=SAVE.maxUnlocked&&g.levelId<500)SAVE.maxUnlocked=g.levelId+1;
+  if(g.levelId>=SAVE.maxUnlocked&&g.levelId<TOTAL_LEVELS)SAVE.maxUnlocked=g.levelId+1;
   Store.save();
   SFX.win();
   // салют: частицы в центре
@@ -1164,7 +1160,7 @@ function checkVictory(){
     '<div class="stat"><b>'+fmtTime(App.time)+'</b><i>время</i></div>'+
     '<div class="stat"><b>'+(SAVE.best[g.levelId]===App.time?'РЕКОРД':fmtTime(SAVE.best[g.levelId]))+'</b><i>лучшее</i></div>'+
     '<div class="stat"><b>'+g.mineCount+'</b><i>мин найдено</i></div>';
-  $('btnNext').style.display=(g.levelId<500)?'block':'none';
+  $('btnNext').style.display=(g.levelId<TOTAL_LEVELS)?'block':'none';
   setTimeout(()=>setState('WIN'),700);
 }
 
@@ -1174,13 +1170,13 @@ function renderMenuStats(){
   const played=SAVE.wins+SAVE.losses;
   const avg=played?fmtTime(Math.round(SAVE.totalTime/Math.max(1,SAVE.wins))):'—';
   $('menuStats').innerHTML=
-    '<div class="stat"><b>'+SAVE.maxUnlocked+'/500</b><i>открыто</i></div>'+
+    '<div class="stat"><b>'+SAVE.maxUnlocked+'/'+TOTAL_LEVELS+'</b><i>открыто</i></div>'+
     '<div class="stat"><b>'+SAVE.wins+'</b><i>побед</i></div>'+
     '<div class="stat"><b>'+SAVE.losses+'</b><i>проигрышей</i></div>'+
     '<div class="stat"><b>'+avg+'</b><i>ср. время победы</i></div>';
 }
 function renderLevelGrid(eon){
-  const ranges=[[1,50],[51,200],[201,500]];
+  const ranges=[[1,20],[21,50],[51,TOTAL_LEVELS]];
   const[a,b]=ranges[eon];const box=$('lvlGrid');box.innerHTML='';
   for(let L=a;L<=b;L++){
     const btn=document.createElement('button');
@@ -1189,7 +1185,11 @@ function renderLevelGrid(eon){
     btn.title=cfg.w+'×'+cfg.h+' · мин '+cfg.mines;
     if(L>SAVE.maxUnlocked){btn.style.opacity=0.25;btn.disabled=true;}
     else if(SAVE.best[L])btn.style.color='var(--cyan)';
-    btn.onclick=()=>{startLevel(L);};
+    // клик по кнопке: мгновенно открываем сектор (обход блокировки long-press на мобильных)
+    let moved=false;
+    btn.addEventListener('pointermove',()=>{moved=true;});
+    btn.addEventListener('pointerdown',()=>{moved=false;});
+    btn.addEventListener('click',e=>{if(moved)return;startLevel(L);});
     box.appendChild(btn);
   }
 }
@@ -1215,7 +1215,7 @@ function bindUI(){
   $('btnQuit').onclick=()=>setState('MENU');
   $('btnRetry').onclick=()=>startLevel(App.game.levelId);
   $('btnOverMenu').onclick=()=>setState('MENU');
-  $('btnNext').onclick=()=>startLevel(Math.min(500,App.game.levelId+1));
+  $('btnNext').onclick=()=>startLevel(Math.min(TOTAL_LEVELS,App.game.levelId+1));
   $('btnReplay').onclick=()=>startLevel(App.game.levelId);
   $('btnWinMenu').onclick=()=>setState('MENU');
   $('btnSfx').onclick=()=>{S.sfx=!S.sfx;Store.save();updateSettingsUI();};
