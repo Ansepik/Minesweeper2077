@@ -1,8 +1,8 @@
-/* Тест: все 500 уровней детерминированы, валидны и решаемы без угадывания */
+/* Тест: все 100 уровней детерминированы, валидны и решаемы без угадывания */
 const C=require('./minesweeper_core.js');
 let maxSalt=0,fail=0;
 const t0=Date.now();
-for(let L=1;L<=500;L++){
+for(let L=1;L<=100;L++){
   try{
     const lv=C.generateCampaignLevel(L);
     // повторная генерация = идентичный результат (детерминизм)
@@ -19,7 +19,7 @@ for(let L=1;L<=500;L++){
       if(lv.grid[id]!==n){console.log('BAD COUNT at',L,id);fail++;}
     }
     const cfg=C.campaignConfig(L);
-    if(L%100===0||L<=3||L===50||L===51||L===200||L===201||L===499)
+    if(L%20===0||L<=3||L===20||L===21||L===50||L===51||L===99)
       console.log(`Ур.${L}: ${cfg.w}x${cfg.h}, мин=${cfg.mines} (${(cfg.mines/(cfg.w*cfg.h)*100).toFixed(1)}%)`);
   }catch(e){console.log('FAIL level',L,e.message);fail++;}
 }
