@@ -1,0 +1,32 @@
+// Модуль приложения CyberSweep (WebView-обёртка над HTML5-игрой)
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.cybersweep.web'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.cybersweep.web"
+        minSdk 24          // Android 7.0+ — WebView с поддержкой WebGL2 где надо
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug // для публичной тестовой сборки
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

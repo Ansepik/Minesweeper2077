@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#0a0a0a">
 <title>CyberSweep Web — киберпанк-сапёр</title>
+<!-- Шрифты: сначала локальные файлы (для офлайн/APK-сборки), затем Google Fonts как резерв -->
+<style>@font-face{font-family:'Orbitron';font-style:normal;font-weight:500;src:url('libs/Orbitron-500.woff2') format('woff2')}
+@font-face{font-family:'Orbitron';font-style:normal;font-weight:700;src:url('libs/Orbitron-700.woff2') format('woff2')}
+@font-face{font-family:'Orbitron';font-style:normal;font-weight:900;src:url('libs/Orbitron-900.woff2') format('woff2')}
+@font-face{font-family:'Rajdhani';font-style:normal;font-weight:400;src:url('libs/Rajdhani-400.woff2') format('woff2')}
+@font-face{font-family:'Rajdhani';font-style:normal;font-weight:600;src:url('libs/Rajdhani-600.woff2') format('woff2')}
+@font-face{font-family:'Rajdhani';font-style:normal;font-weight:700;src:url('libs/Rajdhani-700.woff2') format('woff2')}</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
@@ -20,8 +27,8 @@
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden;background:var(--bg);
   font-family:'Rajdhani','Orbitron',system-ui,sans-serif;color:#cfeef7;
-  touch-action:none;user-select:none;-webkit-user-select:none}
-#scene{position:fixed;inset:0;z-index:0}
+  touch-action:manipulation;-ms-touch-action:manipulation;user-select:none;-webkit-user-select:none}
+#scene{position:fixed;inset:0;z-index:0;touch-action:none} /* вращение/щипок камеры — жесты не перехватываются браузером */
 #scene canvas{display:block}
 
 /* ---- HUD ---- */
@@ -250,8 +257,38 @@ body.shake #scene{animation:shk .45s linear}
 
 <div id="loader"><div class="t">ЗАГРУЗКА ЯДРА…</div><div class="bar"><i></i></div></div>
 
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" onerror="window.__no3d=1"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" onerror="window.__nogsap=1"></script>
+<!-- Библиотеки Three.js и GSAP лежат рядом с index.html в папке libs/ (офлайн).
+     Скрипты ниже загружаются синхронно; если файлов нет (например, сайт залит без
+     папки libs) — автоматически пробуем CDN-зеркала. boot() ждёт готовности через
+     window.__libsReady и показывает понятную ошибку вместо зависшего экрана. -->
+<script src="libs/three.min.js"></script>
+<script src="libs/gsap.min.js"></script>
+<script>
+window.__libsReady=(function(){
+  function loadScript(url){
+    return new Promise(function(resolve){
+      var s=document.createElement('script');
+      s.src=url;s.async=false;
+      s.onload=function(){resolve(true);};
+      s.onerror=function(){s.remove();resolve(false);};
+      document.head.appendChild(s);
+    });
+  }
+  async function ensure(pred,urls){
+    if(pred())return true;                 // локальный файл уже загрузился
+    for(var u of urls){ if(await loadScript(u)&&pred())return true; }
+    return false;
+  }
+  return Promise.all([
+    ensure(function(){return !!window.THREE;},[
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js',
+      'https://unpkg.com/three@0.128.0/build/three.min.js']),
+    ensure(function(){return !!window.gsap;},[
+      'https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js',
+      'https://unpkg.com/gsap@3.12.5/dist/gsap.min.js'])
+  ]);
+})();
+</script>
 <script>
 /* =====================================================================
    CYBERSWEEP WEB — единый файл игры.
@@ -1116,13 +1153,15 @@ function toast(msg){
 
 /* --- запуск уровня --- */
 function startLevel(L){
-  L=Math.max(1,Math.min(TOTAL_LEVELS,L));
+  L=Math.max(1,Math.min(TOTAL_LEVELS,L|0));
   let lv;
   try{lv=generateCampaignLevel(L);}
-  catch(err){toast('ОШИБКА ГЕНЕРАЦИИ');return;}
-  App.game=new MinesGame(lv);
+  catch(err){console.error('[startLevel] генерация',L,err);toast('ОШИБКА ГЕНЕРАЦИИ');return;}
+  try{App.game=new MinesGame(lv);}
+  catch(err){console.error('[startLevel] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
   App.time=0;App.peekIds=null;
-  buildBoard();
+  try{buildBoard();}
+  catch(err){console.error('[startLevel] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
   // волна «проявки» стартовой зоны
   syncTiles();
   const g=App.game;
@@ -1185,11 +1224,19 @@ function renderLevelGrid(eon){
     btn.title=cfg.w+'×'+cfg.h+' · мин '+cfg.mines;
     if(L>SAVE.maxUnlocked){btn.style.opacity=0.25;btn.disabled=true;}
     else if(SAVE.best[L])btn.style.color='var(--cyan)';
-    // клик по кнопке: мгновенно открываем сектор (обход блокировки long-press на мобильных)
-    let moved=false;
+    // Универсальный запуск: реагируем на pointerup И на click, но защищаемся
+    // от двойного срабатывания и от смахиваний (скролл списка уровней).
+    let moved=false,done=false;
+    const fire=(ev)=>{
+      if(moved||done)return;
+      done=true;setTimeout(()=>done=false,400); // защита от dbl-fire click+pointerup
+      startLevel(L);
+    };
+    btn.addEventListener('touchmove',()=>{moved=true;},{passive:true});
     btn.addEventListener('pointermove',()=>{moved=true;});
     btn.addEventListener('pointerdown',()=>{moved=false;});
-    btn.addEventListener('click',e=>{if(moved)return;startLevel(L);});
+    btn.addEventListener('pointerup',fire);
+    btn.addEventListener('click',fire);
     box.appendChild(btn);
   }
 }
@@ -1197,6 +1244,12 @@ function renderLevelGrid(eon){
 /* --- кнопки --- */
 function bindUI(){
   $('btnCampaign').onclick=()=>startLevel(SAVE.level);
+  // Аварийный «страховочной» обработчик: если по какой-то причине click на кнопках
+  // сетки уровней не доходит (особенности браузеров/вебвью), ловим событие на всей панели.
+  document.getElementById('ovLevels').addEventListener('click',e=>{
+    const b=e.target.closest('#lvlGrid .btn');if(!b||b.disabled)return;
+    if(App.state!=='PLAYING')startLevel(parseInt(b.textContent,10));
+  },true);
   $('btnHelp').onclick=()=>setState('HELP');
   $('btnHelpBack').onclick=()=>setState('MENU');
   $('btnLevels').onclick=()=>{renderLevelGrid(0);setState('LEVELS');};
@@ -1299,12 +1352,30 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-function boot(){
-  if(window.__no3d){
-    document.getElementById('loader').innerHTML='<div class="t" style="color:#ff2d55">ОШИБКА: Three.js не загружен.<br>Проверьте интернет-соединение и обновите страницу.</div>';
+window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
+  const ld=document.getElementById('loader');
+  if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
+    ld.style.opacity=1;ld.style.display='flex';
+    ld.innerHTML='<div class="t" style="color:#ff2d55">СБОЙ: '+String(e.message||'неизвестная ошибка')+
+      '<br><span style="font-size:12px;color:#8fb8c8">F12 → консоль → текст ошибки. Обновите страницу (Ctrl+F5).</span></div>';
+  }
+});
+function boot(ok3d){
+  if(!ok3d||!window.THREE){
+    document.getElementById('loader').innerHTML='<div class="t" style="color:#ff2d55">ОШИБКА: Three.js не загружен.<br>'+
+      'Проверьте интернет-соединение и обновите страницу (Ctrl+F5).<br>'+
+      '<span style="font-size:12px;color:#8fb8c8">Если вы открыли файл офлайн — скачайте библиотеки или подключитесь к сети.</span></div>';
     return;
   }
-  initScene();bindInput();bindUI();
+  try{initScene();}
+  catch(err){
+    console.error('[boot] WebGL',err);
+    document.getElementById('loader').innerHTML='<div class="t" style="color:#ff2d55">WEBGL НЕДОСТУПЕН<br>'+
+      '<span style="font-size:13px;color:#cfeef7">'+String(err.message)+'</span><br>'+
+      '<span style="font-size:12px;color:#8fb8c8">Включите аппаратное ускорение в настройках браузера или откройте игру в другом браузере.</span></div>';
+    return;
+  }
+  bindInput();bindUI();
   // Фоновая демонстрационная доска в меню (уровень 1)
   try{
     App.game=new MinesGame(generateCampaignLevel(1));
@@ -1318,8 +1389,17 @@ function boot(){
     '\nСтруктура кампании:',(CAMPAIGN_JSON.length/1024).toFixed(1)+' КБ,',
     CAMPAIGN_DATA.count,'секторов, зерно:',CAMPAIGN_DATA.seed);
 }
-// Дожидаемся шрифтов для корректных спрайтов цифр
-(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(boot);
+// Дожидаемся шрифтов и библиотек (Three.js обязателен, GSAP опционален)
+Promise.all([
+  window.__libsReady||Promise.resolve([true,true]),
+  (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve())
+]).then(function(res){
+  const ok3d=Array.isArray(res[0])?res[0][0]:!!window.THREE;
+  try{boot(ok3d);}catch(err){console.error('[boot]',err);
+    const ld=document.getElementById('loader');
+    if(ld){ld.style.opacity=1;ld.innerHTML='<div class="t" style="color:#ff2d55">СБОЙ ЗАПУСКА: '+String(err.message)+'</div>';}
+  }
+});
 </script>
 </body>
 </html>

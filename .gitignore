@@ -1,3 +1,5 @@
-dbg*.js
-out*.txt
-simout.txt
+# Артефакты сборки Android
+android-app/.gradle/
+android-app/**/build/
+android-app/local.properties
+*.log
