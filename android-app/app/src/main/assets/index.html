@@ -76,6 +76,7 @@ h1.logo span{color:var(--magenta);text-shadow:0 0 14px var(--magenta)}
 .btn.yl{color:var(--yellow);border-color:rgba(255,238,0,.4);background:rgba(255,238,0,.05)}
 .btn.yl:hover{background:rgba(255,238,0,.14);box-shadow:0 0 22px rgba(255,238,0,.4)}
 .btn.small{padding:9px 12px;font-size:12px;display:inline-block;width:auto;margin:6px 8px 0 0}
+.btn.active{background:rgba(0,243,255,.22);box-shadow:0 0 18px rgba(0,243,255,.5);color:#fff}
 .row{display:flex;gap:10px}.row .btn{flex:1}
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:18px 0}
 .stat{border:1px solid rgba(0,243,255,.25);padding:10px;background:rgba(0,243,255,.04);
@@ -144,12 +145,15 @@ body.shake #scene{animation:shk .45s linear}
     <div class="statgrid" id="menuStats"></div>
     <button class="btn mg" id="btnCampaign">▶ Кампания: сектор <span id="nextLvl">1</span></button>
     <div class="row">
+      <button class="btn yl" id="btnFree">Свободная игра</button>
       <button class="btn" id="btnLevels">Выбор сектора</button>
-      <button class="btn yl" id="btnHelp">Как играть</button>
     </div>
     <div class="row">
+      <button class="btn" id="btnHelp">Как играть</button>
       <button class="btn" id="btnSettings">Настройки</button>
-      <button class="btn" id="btnReset">Сброс прогресса</button>
+    </div>
+    <div class="row">
+      <button class="btn yl" id="btnReset">Сброс прогресса</button>
     </div>
   </div>
 </div>
@@ -163,8 +167,35 @@ body.shake #scene{animation:shk .45s linear}
       <button class="btn small yl eonBtn" data-eon="1">II · 21–50</button>
       <button class="btn small yl eonBtn" data-eon="2">III · 51–100</button>
     </div>
-    <div id="lvlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(56px,1fr));gap:6px"></div>
+    <div id="lvlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(56px,1fr));gap:6px;touch-action:manipulation"></div>
     <button class="btn" id="btnLevelsBack" style="margin-top:16px">◄ Назад</button>
+  </div>
+</div>
+
+<!-- ================= СВОБОДНАЯ ИГРА ================= -->
+<div class="overlay" id="ovFree">
+  <div class="panel help">
+    <h2 style="color:var(--yellow)">// Свободная игра //</h2>
+    <p class="sub" style="margin-bottom:10px">Поле генерируется детерминированным алгоритмом и проверяется решаемым без угадывания — одно и то же поле всегда одинаково.</p>
+    <h2 style="color:var(--cyan)">Размер поля</h2>
+    <div class="row" id="freeSizeRow">
+      <button class="btn small fsBtn active" data-size="0">Маленькое<br><i style="font-style:normal;font-size:10px;opacity:.6">9×9</i></button>
+      <button class="btn small fsBtn" data-size="1">Среднее<br><i style="font-style:normal;font-size:10px;opacity:.6">14×14</i></button>
+      <button class="btn small fsBtn" data-size="2">Большое<br><i style="font-style:normal;font-size:10px;opacity:.6">20×20</i></button>
+      <button class="btn small fsBtn" data-size="3">Кошмар<br><i style="font-style:normal;font-size:10px;opacity:.6">28×28</i></button>
+    </div>
+    <h2 style="color:var(--cyan)">Сложность (количество мин)</h2>
+    <div class="row" id="freeDiffRow">
+      <button class="btn small fdBtn" data-diff="0">Новичок</button>
+      <button class="btn small fdBtn active" data-diff="1">Стандарт</button>
+      <button class="btn small fdBtn" data-diff="2">Профи</button>
+      <button class="btn small fdBtn" data-diff="3">Легенда</button>
+    </div>
+    <div class="statgrid"><div class="stat"><b id="freePreview">9×9 · 10 мин</b><i>параметры поля</i></div></div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn mg" id="btnFreeStart" style="flex:2">▶ Начать операцию</button>
+      <button class="btn" id="btnFreeBack">◄ Назад</button>
+    </div>
   </div>
 </div>
 
@@ -460,17 +491,26 @@ function validateSolvable(w,h,grid,safeCells){
     if(progressed)continue;
     const seen=new Set();const uniq=[];
     for(const e of eqs){if(!seen.has(e.key)){seen.add(e.key);uniq.push(e);}}
-    for(const a of uniq){
+    /* R2: подмножества — включая случай равных по размеру множеств
+       (если множества клеток совпадают, разность остатков даёт вердикт) */
+    outerR2: for(const a of uniq){
       for(const b of uniq){
         if(a===b)continue;
-        if(a.cells.length<b.cells.length&&a.cells.every(c=>b.cells.includes(c))){
-          const setA=new Set(a.cells);
-          const diff=b.cells.filter(c=>!setA.has(c));
-          if(b.rem===a.rem){revealAll(diff);progressed=true;}
-          else if(b.rem-a.rem===diff.length){flagAll(diff);progressed=true;}
-        }
+        const sa=new Set(a.cells),sb=new Set(b.cells);
+        let subAB=true,subBA=true;
+        for(const c of a.cells)if(!sb.has(c))subAB=false;
+        for(const c of b.cells)if(!sa.has(c))subBA=false;
+        if(!(subAB||subBA))continue;
+        const big=subAB?b:a,small=subAB?a:b;
+        const sset=new Set(small.cells);
+        const diff=big.cells.filter(c=>!sset.has(c));
+        const dRem=big.rem-small.rem;
+        if(dRem===0){if(diff.length)revealAll(diff);
+          /* равные множества при разных остатках — противоречие поля */
+          if(diff.length===0&&big.rem!==small.rem)return false;
+          progressed=true;break outerR2;}
+        if(dRem===diff.length){flagAll(diff);progressed=true;break outerR2;}
       }
-      if(progressed)break;
     }
     if(progressed)continue;
     outerX: for(const a of uniq){
@@ -590,6 +630,38 @@ function generateCampaignLevel(level){
   }
 }
 
+/* ============ СВОБОДНАЯ ИГРА: детерминированная генерация ============
+   Никакого рандома: поле однозначно задаётся парой (размер, сложность).
+   Тот же набор настроек всегда даёт ТО ЖЕ САМОЕ поле. Каждое поле
+   проходит тот же валидатор решаемости R1–R4 — угадывание не нужно. */
+const FREE_SIZES=[9,14,20,28];                 // Маленькое/Среднее/Большое/Кошмар
+const FREE_DENSITIES=[0.10,0.15,0.20,0.26];    // Новичок/Стандарт/Профи/Легенда
+const freeCache=new Map();
+function freeConfig(sizeIdx,diffIdx){
+  const side=FREE_SIZES[sizeIdx]||FREE_SIZES[0];
+  const w=side,h=side;
+  let mines=Math.round(w*h*(FREE_DENSITIES[diffIdx]||FREE_DENSITIES[0]));
+  mines=Math.max(1,Math.min(mines,w*h-12));
+  return {w,h,mines};
+}
+function generateFreeLevel(sizeIdx,diffIdx){
+  const key=sizeIdx+'x'+diffIdx;
+  if(freeCache.has(key))return freeCache.get(key);
+  const cfg=freeConfig(sizeIdx,diffIdx);
+  const id=-(sizeIdx*10+diffIdx+1); // отрицательный id отличает свободную игру от кампании
+  let salt=0;
+  for(;;){
+    const raw=genLevelRaw(id,cfg.w,cfg.h,cfg.mines,salt);
+    if(raw&&validateSolvable(cfg.w,cfg.h,raw.grid,raw.safe)){
+      const lv={...cfg,grid:raw.grid,safe:raw.safe,id:id,free:true,sizeIdx,diffIdx};
+      freeCache.set(key,lv);
+      return lv;
+    }
+    salt++;
+    if(salt>3000)throw new Error('Не удалось собрать решаемое поле. Измените настройки.');
+  }
+}
+
 /* ================= [2] КЛАСС ПАРТИИ ================= */
 class MinesGame{
   constructor(lv){
@@ -648,7 +720,7 @@ class MinesGame{
    (размер, число мин, позиции мин, стартовые открытые клетки)
    ВОССТАНАВЛИВАЕТСЯ из этой структуры детерминированным генератором
    и проверяется валидатором решаемости — без единого случайного бита. */
-const CAMPAIGN_SEED='CyberSweep Web :: Genesis Protocol v1.0 :: NEON-GRID-2077';
+const CAMPAIGN_SEED='CyberSweep Web :: Genesis Protocol v1.1 :: NEON-GRID-2077'; // v1.1: усилен валидатор R2 (решаемость без угадывания)
 const CAMPAIGN_JSON=JSON.stringify({
   format:'CSW-LVL-1',
   seed:CAMPAIGN_SEED,
@@ -731,8 +803,37 @@ const App={
   W:0,H:0,SZ:1,game:null,state:'MENU',
   camAz:0.9,camEl:0.95,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
-  dust:null
+  dust:null,freeMode:false
 };
+
+/* Инстанс-меши пересоздаются под размер поля (кампания ≤24×24,
+   свободный режим «Кошмар» — до 28×28). */
+let _instCap=0;
+function ensureCapacity(n){
+  if(!_instCap||n>_instCap){
+    const cap=Math.max(24*24,n);_instCap=cap;
+    if(App.tiles)App.scene.remove(App.tiles);
+    if(App.flags)App.scene.remove(App.flags);
+    if(App.marks)App.scene.remove(App.marks);
+    if(App.glows)App.scene.remove(App.glows);
+    const tileGeo=new THREE.BoxGeometry(1,1,1);
+    const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.55,metalness:0.55});
+    App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,cap);
+    App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    App.scene.add(App.tiles);
+    const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
+    const flagGeo=new THREE.ExtrudeGeometry(tri,{depth:0.02,bevelEnabled:false});flagGeo.rotateX(-Math.PI/2);flagGeo.translate(0,0.55,0);
+    App.flags=new THREE.InstancedMesh(flagGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),cap);
+    App.scene.add(App.flags);
+    const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
+    App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),cap);
+    App.scene.add(App.marks);
+    const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
+    App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),cap);
+    App.scene.add(App.glows);
+    applyGlow();
+  }
+}
 
 /* layout() и applyCamera() определены ниже едиными версиями,
    поддерживающими перспективную и ортографическую камеры. */
@@ -898,6 +999,7 @@ function updateNumbers(){
 function buildBoard(){
   clearNumbers();
   const g=App.game;App.W=g.w;App.hFix=g.h;
+  ensureCapacity(g.total); // мешей должно хватать на все клетки поля
   App.SZ=Math.min(1,26/Math.max(g.w,g.h));
   // плита
   App.plate.scale.set((g.w+1.6)*App.SZ,0.35,(g.h+1.6)*App.SZ);
@@ -1112,7 +1214,7 @@ function pulseTile(id){
 
 /* ================= [8] МАШИНА СОСТОЯНИЙ + HUD ================= */
 const $=id=>document.getElementById(id);
-const OV={menu:$('ovMenu'),levels:$('ovLevels'),help:$('ovHelp'),settings:$('ovSettings'),pause:$('ovPause'),over:$('ovOver'),win:$('ovWin')};
+const OV={menu:$('ovMenu'),levels:$('ovLevels'),free:$('ovFree'),help:$('ovHelp'),settings:$('ovSettings'),pause:$('ovPause'),over:$('ovOver'),win:$('ovWin')};
 function showOverlay(name){
   for(const k in OV){const on=(k===name);on?T.uiShow(OV[k]):T.uiHide(OV[k]);}
 }
@@ -1126,13 +1228,16 @@ function setState(st){
   if(st==='OVER'){showOverlay('over');stopTimer();}
   if(st==='WIN'){showOverlay('win');stopTimer();}
   if(st==='LEVELS'){showOverlay('levels');}
+  if(st==='FREE'){showOverlay('free');}
   if(st==='HELP'){showOverlay('help');}
   if(st==='SETTINGS'){showOverlay('settings');}
 }
 function fmtTime(s){const m=Math.floor(s/60);return m+':'+String(s%60).padStart(2,'0');}
+const FREE_SIZE_NAMES=['Маленькое','Среднее','Большое','Кошмар'];
+const FREE_DIFF_NAMES=['Новичок','Стандарт','Профи','Легенда'];
 function refreshHud(){
   const g=App.game;if(!g)return;
-  $('uiLevel').textContent=g.levelId+'/'+TOTAL_LEVELS;
+  $('uiLevel').textContent=g.free?(FREE_SIZE_NAMES[g.sizeIdx]+'/'+FREE_DIFF_NAMES[g.diffIdx]):(g.levelId+'/'+TOTAL_LEVELS);
   $('uiMines').textContent=String(Math.max(-99,g.mineCount-g.flags()));
   $('uiTime').textContent=fmtTime(App.time);
 }
@@ -1151,27 +1256,51 @@ function toast(msg){
   else{t.style.opacity=1;setTimeout(()=>t.style.opacity=0,1600);}
 }
 
-/* --- запуск уровня --- */
+/* --- запуск уровня (кампания) --- */
 function startLevel(L){
+  App.freeMode=false;
   L=Math.max(1,Math.min(TOTAL_LEVELS,L|0));
   let lv;
   try{lv=generateCampaignLevel(L);}
   catch(err){console.error('[startLevel] генерация',L,err);toast('ОШИБКА ГЕНЕРАЦИИ');return;}
-  try{App.game=new MinesGame(lv);}
-  catch(err){console.error('[startLevel] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
-  App.time=0;App.peekIds=null;
+  launchLevel(lv);
+  SAVE.level=L;Store.save();
+}
+
+/* --- запуск поля свободной игры: детерминированное генерирование
+       по выбранным настройкам, с проверкой решаемости валидатором R1–R4 --- */
+let FREE_SEL={size:0,diff:1};
+function startFreeLevel(){
+  App.freeMode=true;
+  const btn=$('btnFreeStart');
+  if(btn){btn.textContent='⚙ СБОРКА ПОЛЯ…';btn.disabled=true;}
+  // отдаём поток управления браузеру, чтобы кнопка успела перерисоваться
+  setTimeout(()=>{
+    let lv=null,err=null;
+    try{lv=generateFreeLevel(FREE_SEL.size,FREE_SEL.diff);}
+    catch(e){err=e;}
+    if(btn){btn.textContent='▶ Начать операцию';btn.disabled=false;}
+    if(err){console.error('[free] генерация',err);toast('СБОЙ ГЕНЕРАЦИИ: '+err.message);App.freeMode=false;return;}
+    launchLevel(lv);
+  },60);
+}
+
+/* --- общий конвейер запуска партии на 3D-сцене --- */
+function launchLevel(lv){
+  let g;
+  try{g=new MinesGame(lv);}
+  catch(err){console.error('[launch] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
+  App.game=g;App.time=0;App.peekIds=null;
   try{buildBoard();}
-  catch(err){console.error('[startLevel] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
-  // волна «проявки» стартовой зоны
+  catch(err){console.error('[launch] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
   syncTiles();
-  const g=App.game;
+  // волна «проявки» стартовой зоны
   for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,1,1,cOpen);
   if(window.gsap){
     const objs=[];for(let id=0;id<g.total;id++)if(g.state[id]===1)objs.push(id);
     objs.forEach((id,i)=>T.flipIn(id,Math.min(0.6,i*0.02)));
   }else syncTiles();
   refreshHud();startTimer();setState('PLAYING');
-  SAVE.level=L;Store.save();
 }
 function onDefeat(id){
   SAVE.losses++;Store.save();
@@ -1179,7 +1308,7 @@ function onDefeat(id){
   // показать все мины
   const g=App.game;
   for(let i=0;i<g.total;i++)if(g.grid[i]===-1&&g.state[i]===0)g.state[i]=1;
-  setTimeout(()=>{syncTiles();$('overLvl').textContent=g.levelId;setState('OVER');},650);
+  setTimeout(()=>{syncTiles();$('overLvl').textContent=g.free?(FREE_SIZE_NAMES[g.sizeIdx]+' · '+FREE_DIFF_NAMES[g.diffIdx]):g.levelId;setState('OVER');},650);
 }
 function checkVictory(){
   const g=App.game;if(!g||!g.won)return;
@@ -1193,13 +1322,13 @@ function checkVictory(){
   SFX.win();
   // салют: частицы в центре
   explodeAt(Math.floor(g.total/2));
-  $('winLvl').textContent=g.levelId;
+  $('winLvl').textContent=g.free?(FREE_SIZE_NAMES[g.sizeIdx]+' · '+FREE_DIFF_NAMES[g.diffIdx]):g.levelId;
   const stats=$('winStats');
   stats.innerHTML=
     '<div class="stat"><b>'+fmtTime(App.time)+'</b><i>время</i></div>'+
     '<div class="stat"><b>'+(SAVE.best[g.levelId]===App.time?'РЕКОРД':fmtTime(SAVE.best[g.levelId]))+'</b><i>лучшее</i></div>'+
     '<div class="stat"><b>'+g.mineCount+'</b><i>мин найдено</i></div>';
-  $('btnNext').style.display=(g.levelId<TOTAL_LEVELS)?'block':'none';
+  $('btnNext').style.display=(!g.free&&g.levelId<TOTAL_LEVELS)?'block':'none';
   setTimeout(()=>setState('WIN'),700);
 }
 
@@ -1214,74 +1343,107 @@ function renderMenuStats(){
     '<div class="stat"><b>'+SAVE.losses+'</b><i>проигрышей</i></div>'+
     '<div class="stat"><b>'+avg+'</b><i>ср. время победы</i></div>';
 }
+/* Универсальный обработчик нажатия для HTML-кнопок (мышь + тач в WebView).
+   pointerup — основной путь (надёжно работает даже если click «теряется»
+   из-за особенностей WebView/жестов); click — страховка для десктопа.
+   Флаг done с таймаутом защищает от двойного срабатывания. */
+function onTap(el,fn){
+  let done=false;
+  const fire=e=>{
+    if(done)return;done=true;setTimeout(()=>done=false,500);
+    if(e&&e.preventDefault)e.preventDefault();
+    try{fn(e);}catch(err){console.error('[onTap]',err);toast('СБОЙ: '+err.message);}
+  };
+  el.addEventListener('pointerup',fire);
+  el.addEventListener('click',fire);
+}
 function renderLevelGrid(eon){
   const ranges=[[1,20],[21,50],[51,TOTAL_LEVELS]];
   const[a,b]=ranges[eon];const box=$('lvlGrid');box.innerHTML='';
   for(let L=a;L<=b;L++){
     const btn=document.createElement('button');
     btn.className='btn small';btn.textContent=L;
+    btn.dataset.level=L;
     const cfg=campaignConfig(L);
     btn.title=cfg.w+'×'+cfg.h+' · мин '+cfg.mines;
     if(L>SAVE.maxUnlocked){btn.style.opacity=0.25;btn.disabled=true;}
     else if(SAVE.best[L])btn.style.color='var(--cyan)';
-    // Универсальный запуск: реагируем на pointerup И на click, но защищаемся
-    // от двойного срабатывания и от смахиваний (скролл списка уровней).
-    let moved=false,done=false;
-    const fire=(ev)=>{
-      if(moved||done)return;
-      done=true;setTimeout(()=>done=false,400); // защита от dbl-fire click+pointerup
-      startLevel(L);
-    };
-    btn.addEventListener('touchmove',()=>{moved=true;},{passive:true});
-    btn.addEventListener('pointermove',()=>{moved=true;});
-    btn.addEventListener('pointerdown',()=>{moved=false;});
-    btn.addEventListener('pointerup',fire);
-    btn.addEventListener('click',fire);
+    // Защита от смахиваний при прокрутке списка уровней:
+    // move больше порога между down и up => это скролл, а не нажатие.
+    let sx=-1,sy=-1,moved=false;
+    btn.addEventListener('pointerdown',e=>{moved=false;sx=e.clientX;sy=e.clientY;});
+    btn.addEventListener('pointermove',e=>{
+      if(sx>=0&&Math.hypot(e.clientX-sx,e.clientY-sy)>10)moved=true;
+    });
+    if(!btn.disabled)onTap(btn,()=>{if(!moved)startLevel(L);});
     box.appendChild(btn);
   }
 }
 
 /* --- кнопки --- */
 function bindUI(){
-  $('btnCampaign').onclick=()=>startLevel(SAVE.level);
-  // Аварийный «страховочной» обработчик: если по какой-то причине click на кнопках
-  // сетки уровней не доходит (особенности браузеров/вебвью), ловим событие на всей панели.
-  document.getElementById('ovLevels').addEventListener('click',e=>{
+  const inst=(sel,fn)=>document.querySelectorAll(sel).forEach(b=>{b.onclick=fn;b.addEventListener('pointerup',e=>{e.preventDefault();fn.call(b,e);});});
+  inst('#btnCampaign',()=>startLevel(SAVE.level));
+  inst('#btnFree',()=>{updateFreePreview();setState('FREE');});
+  inst('#btnHelp',()=>setState('HELP'));
+  inst('#btnHelpBack',()=>setState('MENU'));
+  inst('#btnLevels',()=>{renderLevelGrid(0);setState('LEVELS');});
+  inst('#btnLevelsBack',()=>setState('MENU'));
+  inst('#btnSettings',()=>{updateSettingsUI();setState('SETTINGS');});
+  inst('#btnSettingsBack',()=>setState('MENU'));
+  inst('#btnReset',()=>{if(confirm('Стереть весь прогресс кампании?')){Store.reset();renderMenuStats();toast('ПРОГРЕСС СТЁРТ');}});
+  // Экран свободной игры: переключатели размера/сложности + старт
+  document.querySelectorAll('.fsBtn').forEach(b=>inst('.fsBtn[data-size="'+b.dataset.size+'"]',()=>{
+    FREE_SEL.size=+b.dataset.size;
+    document.querySelectorAll('.fsBtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');updateFreePreview();
+  }));
+  document.querySelectorAll('.fdBtn').forEach(b=>inst('.fdBtn[data-diff="'+b.dataset.diff+'"]',()=>{
+    FREE_SEL.diff=+b.dataset.diff;
+    document.querySelectorAll('.fdBtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');updateFreePreview();
+  }));
+  inst('#btnFreeStart',()=>startFreeLevel());
+  inst('#btnFreeBack',()=>setState('MENU'));
+  // Аварийная «страховка»: ловим click на всей панели списка уровней —
+  // если по какой-то причине обработчик кнопки не сработал.
+  $('ovLevels').addEventListener('click',e=>{
     const b=e.target.closest('#lvlGrid .btn');if(!b||b.disabled)return;
-    if(App.state!=='PLAYING')startLevel(parseInt(b.textContent,10));
+    const L=parseInt(b.dataset.level||b.textContent,10);
+    if(L>=1&&L<=TOTAL_LEVELS&&App.state!=='PLAYING')startLevel(L);
   },true);
-  $('btnHelp').onclick=()=>setState('HELP');
-  $('btnHelpBack').onclick=()=>setState('MENU');
-  $('btnLevels').onclick=()=>{renderLevelGrid(0);setState('LEVELS');};
-  $('btnLevelsBack').onclick=()=>setState('MENU');
-  document.querySelectorAll('.eonBtn').forEach(b=>b.onclick=()=>{
-    document.querySelectorAll('.eonBtn').forEach(x=>x.classList.remove('active'));
-    renderLevelGrid(+b.dataset.eon);
+  // Эоны — тоже через onclick (обычные кнопки, но для надёжности дублируем)
+  document.querySelectorAll('.eonBtn').forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll('.eonBtn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');renderLevelGrid(+b.dataset.eon);
+    };
   });
-  $('btnSettings').onclick=()=>{updateSettingsUI();setState('SETTINGS');};
-  $('btnSettingsBack').onclick=()=>setState('MENU');
-  $('btnReset').onclick=()=>{if(confirm('Стереть весь прогресс кампании?')){Store.reset();renderMenuStats();toast('ПРОГРЕСС СТЁРТ');}};
-  $('btnPause').onclick=()=>{if(App.state==='PLAYING')setState('PAUSED');};
-  $('btnBack').onclick=()=>{if(App.state!=='MENU')setState('MENU');};
-  $('btnResume').onclick=()=>{if(App.game){startTimerKeep();setState('PLAYING');}};
-  $('btnRestart').onclick=()=>startLevel(App.game?App.game.levelId:SAVE.level);
-  $('btnQuit').onclick=()=>setState('MENU');
-  $('btnRetry').onclick=()=>startLevel(App.game.levelId);
-  $('btnOverMenu').onclick=()=>setState('MENU');
-  $('btnNext').onclick=()=>startLevel(Math.min(TOTAL_LEVELS,App.game.levelId+1));
-  $('btnReplay').onclick=()=>startLevel(App.game.levelId);
-  $('btnWinMenu').onclick=()=>setState('MENU');
-  $('btnSfx').onclick=()=>{S.sfx=!S.sfx;Store.save();updateSettingsUI();};
-  $('btnGlow').onclick=()=>{S.glow=!S.glow;applyGlow();Store.save();updateSettingsUI();};
-  $('btnQuality').onclick=()=>{S.quality=!S.quality;App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));layout();Store.save();updateSettingsUI();};
-  $('btnCam').onclick=()=>{S.perspective=!S.perspective;toggleProjection();Store.save();updateSettingsUI();};
+  inst('#btnPause',()=>{if(App.state==='PLAYING')setState('PAUSED');});
+  inst('#btnBack',()=>{if(App.state!=='MENU')setState('MENU');});
+  inst('#btnResume',()=>{if(App.game){startTimerKeep();setState('PLAYING');}});
+  inst('#btnRestart',()=>{if(App.freeMode)startFreeLevel();else startLevel(App.game?App.game.levelId:SAVE.level);});
+  inst('#btnQuit',()=>setState('MENU'));
+  inst('#btnRetry',()=>{if(App.freeMode)startFreeLevel();else startLevel(App.game.levelId);});
+  inst('#btnOverMenu',()=>setState('MENU'));
+  inst('#btnNext',()=>startLevel(Math.min(TOTAL_LEVELS,App.game.levelId+1)));
+  inst('#btnReplay',()=>{if(App.freeMode)startFreeLevel();else startLevel(App.game.levelId);});
+  inst('#btnWinMenu',()=>setState('MENU'));
+  inst('#btnSfx',()=>{S.sfx=!S.sfx;Store.save();updateSettingsUI();});
+  inst('#btnGlow',()=>{S.glow=!S.glow;applyGlow();Store.save();updateSettingsUI();});
+  inst('#btnQuality',()=>{S.quality=!S.quality;App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));layout();Store.save();updateSettingsUI();});
+  inst('#btnCam',()=>{S.perspective=!S.perspective;toggleProjection();Store.save();updateSettingsUI();});
   addEventListener('keydown',e=>{
     if(e.key==='Escape'){
       if(App.state==='PLAYING')setState('PAUSED');
       else if(App.state==='PAUSED'){$('btnResume').click();}
-      else if(App.state==='HELP'||App.state==='SETTINGS'||App.state==='LEVELS')setState('MENU');
+      else if(App.state==='HELP'||App.state==='SETTINGS'||App.state==='LEVELS'||App.state==='FREE')setState('MENU');
     }
   });
+}
+function updateFreePreview(){
+  const c=freeConfig(FREE_SEL.size,FREE_SEL.diff);
+  $('freePreview').textContent=c.w+'×'+c.h+' · '+c.mines+' мин';
 }
 function startTimerKeep(){App.startTs=Date.now()-App.time*1000;startTimer();}
 function applyGlow(){
