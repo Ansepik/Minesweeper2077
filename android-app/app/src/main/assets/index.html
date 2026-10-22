@@ -238,6 +238,7 @@ body.shake #scene{animation:shk .45s linear}
     <h2 style="color:var(--cyan)">// Настройки //</h2>
     <div class="row" style="margin-top:14px">
       <button class="btn" id="btnSfx">Звук: ВКЛ</button>
+      <button class="btn" id="btnMusic">Музыка: ВКЛ</button>
       <button class="btn" id="btnGlow">Свечение: ВКЛ</button>
     </div>
     <div class="row">
@@ -612,10 +613,43 @@ function validateSolvable(w,h,grid,safeCells){
   return solved&&minesOk>0&&safeCells.every(s=>grid[s]!==-1);
 }
 
-/* Публичный вход: уровень L → валидная конфигурация (кэшируется). */
+/* Публичный вход: уровень L → валидная конфигурация (кэшируется).
+   Быстрый путь: если рядом лежит предвычисленный файл levels.json
+   (в APK он упакован), поле берётся оттуда мгновенно — без долгой
+   валидации на телефоне. Если файла нет или он повреждён — включается
+   детерминированный генератор с той же схемой зерен (salt-перебор):
+   результат идентичен, просто требуется время на проверку решаемости. */
+let PRELOADED=null;            // {levels:{id:{w,h,mines,grid,safe}}, free:{key:{...}}}
+try{
+  const x=new XMLHttpRequest();
+  x.open('GET','levels.json',false); // синхронно: один раз при старте
+  x.send(null);
+  if(x.status===0||x.status===200){
+    const j=JSON.parse(x.responseText);
+    if(j&&j.levels&&j.free)PRELOADED=j;
+  }
+}catch(e){/* офлайн/недоступно — работаем генератором */}
+
+function findPreloadedFast(w,h,mines){
+  /* Совпадение по метаданным (w,h,mines) для свободной игры: уровни
+     кампании имеют unique-пары, поэтому риск ложного совпадения принят
+     только когда точного ключа нет; сами поля всё равно решаемы. */
+  if(!PRELOADED)return null;
+  for(const k in PRELOADED.levels){
+    const c=PRELOADED.levels[k];
+    if(c.w===w&&c.h===h&&c.mines===mines)return c;
+  }
+  return null;
+}
+
 const levelCache=new Map();
 function generateCampaignLevel(level){
   if(levelCache.has(level))return levelCache.get(level);
+  if(PRELOADED&&PRELOADED.levels[level]){
+    const c=PRELOADED.levels[level];
+    const lv={w:c.w,h:c.h,mines:c.mines,grid:c.grid,safe:c.safe,id:level};
+    levelCache.set(level,lv);return lv;
+  }
   const cfg=campaignConfig(level);
   let salt=0;
   for(;;){
@@ -649,6 +683,12 @@ function generateFreeLevel(sizeIdx,diffIdx){
   if(freeCache.has(key))return freeCache.get(key);
   const cfg=freeConfig(sizeIdx,diffIdx);
   const id=-(sizeIdx*10+diffIdx+1); // отрицательный id отличает свободную игру от кампании
+  /* Быстрый путь из предвычисленной базы (levels.json в APK): */
+  if(PRELOADED&&PRELOADED.free&&PRELOADED.free[key]){
+    const c=PRELOADED.free[key];
+    const lv={w:c.w,h:c.h,mines:c.mines,grid:c.grid,safe:c.safe,id:id,free:true,sizeIdx,diffIdx};
+    freeCache.set(key,lv);return lv;
+  }
   let salt=0;
   for(;;){
     const raw=genLevelRaw(id,cfg.w,cfg.h,cfg.mines,salt);
@@ -739,7 +779,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
   key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
-  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,glow:true,quality:true,perspective:true}};},
+  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true}};},
   load(){
     try{
       const raw=localStorage.getItem(this.key);
@@ -789,6 +829,65 @@ const SFX={
   }
 };
 
+/* --------- Фоновая музыка: «Лунная соната» (Бетховен, op.27 №2, ч.1) ---------
+   Полностью синтезируется через WebAudio — без внешних аудиофайлов, работает офлайн. */
+const MUSIC={timer:null,step:0,nextT:0,gain:null};
+// Такт = [басовые ноты (Гц или 0=пауза), триолы арпеджио верхнего голоса]
+const MOON=[
+ [[55,[329.63,415.30,493.88]],[55,[329.63,415.30,493.88]]], // Gm: sol + si-b/do/re
+ [[49,[293.66,369.99,440.00]],[49,[293.66,369.99,440.00]]], // D#: fa# + la#/si/re
+ [[41.2,[349.23,415.30,523.25]],[41.2,[349.23,415.30,523.25]]], // E: fa + si-b/do
+ [[41.2,[349.23,415.30,523.25]],[41.2,[349.23,415.30,523.25]]],
+ [[43.65,[261.63,329.63,392.00]],[43.65,[261.63,329.63,392.00]]], // F: do + mi/sol
+ [[43.65,[277.18,349.23,415.30]],[43.65,[277.18,349.23,415.30]]], // F#: do# + fa/si-b
+ [[34.65,[293.66,349.23,440.00]],[34.65,[293.66,349.23,440.00]]], // Bb: fa#? -> si-b + fa/la
+ [[34.65,[293.66,349.23,440.00]],[34.65,[293.66,349.23,440.00]]],
+ [[49,[246.94,293.66,369.99]],[49,[246.94,293.66,369.99]]], // D: re + fa#/si
+ [[49,[246.94,293.66,369.99]],[49,[246.94,293.66,369.99]]],
+ [[55,[220.00,293.66,349.23]],[55,[220.00,293.66,349.23]]], // Gm: sol + re/fa/si-b
+ [[55,[220.00,293.66,349.23]],[55,[220.00,293.66,349.23]]],
+];
+function mNote(ac,freq,t,dur,vol,type){ // одна нота с плавной огибающей
+  const o=ac.createOscillator(),g=ac.createGain();
+  o.type=type;o.frequency.value=freq;
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.linearRampToValueAtTime(vol,t+Math.min(0.12,dur*0.3));
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(MUSIC.gain);o.start(t);o.stop(t+dur+0.05);
+}
+function musicStart(){
+  if(!S.music)return;
+  const ac=audio();if(!ac)return;
+  if(ac.state==='suspended')ac.resume();
+  if(MUSIC.timer)return; // уже играет
+  if(!MUSIC.gain){
+    MUSIC.gain=ac.createGain();MUSIC.gain.gain.value=0.0;
+    const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=1400; // приглушённый «ночной» тембр
+    MUSIC.gain.connect(lp).connect(ac.destination);
+  }
+  MUSIC.gain.gain.cancelScheduledValues(ac.currentTime);
+  MUSIC.gain.gain.setTargetAtTime(0.5,ac.currentTime,0.8); // плавное появление
+  MUSIC.step=0;MUSIC.nextT=ac.currentTime+0.1;
+  const QUARTER=0.55; // темп адажио
+  MUSIC.timer=setInterval(()=>{
+    const ac2=audio();if(!ac2||!MUSIC.timer)return;
+    while(MUSIC.nextT<ac2.currentTime+0.7){ // упреждающая планировка нот
+      const bar=MOON[Math.floor(MUSIC.step/2)%MOON.length];
+      const isOdd=(MUSIC.step%2===1);
+      const beat=bar[isOdd?1:0];
+      const bass=beat[0],tri=beat[1];
+      if(bass)mNote(ac2,bass,MUSIC.nextT,QUARTER*2*0.95,0.09,'triangle'); // левая рука
+      tri.forEach((f,i)=>mNote(ac2,f,MUSIC.nextT+(i+1)*QUARTER/3,QUARTER/3*1.9,0.045,'sine')); // триоль
+      MUSIC.nextT+=QUARTER;MUSIC.step++;
+    }
+  },120);
+}
+function musicStop(fade){
+  if(!MUSIC.timer)return;
+  clearInterval(MUSIC.timer);MUSIC.timer=null;
+  if(MUSIC.gain){const ac=audio();if(ac)MUSIC.gain.gain.setTargetAtTime(0.0001,ac.currentTime,fade||0.6);}
+}
+
 /* ================= [6] 3D-СЦЕНА THREE.JS ================= */
 const COLORS={
   bg:0x0a0a0a,cyan:0x00f3ff,magenta:0xff00ff,yellow:0xffee00,
@@ -806,34 +905,11 @@ const App={
   dust:null,freeMode:false
 };
 
-/* Инстанс-меши пересоздаются под размер поля (кампания ≤24×24,
-   свободный режим «Кошмар» — до 28×28). */
+/* Инстанс-меши создаются ОДИН раз с запасом под максимальное поле
+   (свободный режим «Кошмар» 28×28). Пересоздание мешей во время игры
+   потенциально нестабильно, поэтому избегаем его полностью. */
 let _instCap=0;
-function ensureCapacity(n){
-  if(!_instCap||n>_instCap){
-    const cap=Math.max(24*24,n);_instCap=cap;
-    if(App.tiles)App.scene.remove(App.tiles);
-    if(App.flags)App.scene.remove(App.flags);
-    if(App.marks)App.scene.remove(App.marks);
-    if(App.glows)App.scene.remove(App.glows);
-    const tileGeo=new THREE.BoxGeometry(1,1,1);
-    const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.55,metalness:0.55});
-    App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,cap);
-    App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    App.scene.add(App.tiles);
-    const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
-    const flagGeo=new THREE.ExtrudeGeometry(tri,{depth:0.02,bevelEnabled:false});flagGeo.rotateX(-Math.PI/2);flagGeo.translate(0,0.55,0);
-    App.flags=new THREE.InstancedMesh(flagGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),cap);
-    App.scene.add(App.flags);
-    const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
-    App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),cap);
-    App.scene.add(App.marks);
-    const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
-    App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),cap);
-    App.scene.add(App.glows);
-    applyGlow();
-  }
-}
+function ensureCapacity(n){ /* вместимость заложена в initScene, пересборка не нужна */ }
 
 /* layout() и applyCamera() определены ниже едиными версиями,
    поддерживающими перспективную и ортографическую камеры. */
@@ -870,21 +946,21 @@ function initScene(){
   // Инстанс-меши: плитки / флаги / вопросы / подсветка
   const tileGeo=new THREE.BoxGeometry(1,1,1);
   const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.55,metalness:0.55});
-  App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,24*24);
+  App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
 
   const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
   const flagGeo=new THREE.ExtrudeGeometry(tri,{depth:0.02,bevelEnabled:false});flagGeo.rotateX(-Math.PI/2);flagGeo.translate(0,0.55,0);
-  App.flags=new THREE.InstancedMesh(flagGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),24*24);
+  App.flags=new THREE.InstancedMesh(flagGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),28*28);
   App.scene.add(App.flags);
 
   const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
-  App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),24*24);
+  App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),28*28);
   App.scene.add(App.marks);
 
   const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
-  App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),24*24);
+  App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),28*28);
   App.scene.add(App.glows);
 
   // Текстовые спрайты цифр (создаются под текущую сетку)
@@ -1220,10 +1296,12 @@ function showOverlay(name){
 }
 function setState(st){
   App.state=st;
+  hideGenOverlay(); // любое переход состояния отменяет показ сборки
   const playing=(st==='PLAYING');
   $('hud').classList.toggle('hidden',!(playing||st==='PAUSED'||st==='OVER'||st==='WIN'));
   $('hintBar').classList.toggle('hidden',!playing);
-  if(st==='MENU'){showOverlay('menu');stopTimer();renderMenuStats();}
+  if(st==='MENU'){showOverlay('menu');stopTimer();renderMenuStats();musicStart();}
+  else musicStop(); // музыка играет только в главном меню
   if(st==='PAUSED'){showOverlay('pause');stopTimer();}
   if(st==='OVER'){showOverlay('over');stopTimer();}
   if(st==='WIN'){showOverlay('win');stopTimer();}
@@ -1256,33 +1334,120 @@ function toast(msg){
   else{t.style.opacity=1;setTimeout(()=>t.style.opacity=0,1600);}
 }
 
-/* --- запуск уровня (кампания) --- */
+/* --- запуск уровня (кампания) ---
+   УРОВНИ ОТКРЫВАЮТСЯ МГНОВЕННО: конфигурация каждого сектора лежит в
+   предвычисленной базе levels.json (упакована в APK / рядом с index.html),
+   поэтому никакого долгого перебора солёных зёрен на телефоне не происходит.
+   Фоновый генератор остаётся только как страховка для случая повреждённой
+   базы — он ничего не блокирует и запускается вне очереди ввода. */
+let __genToken=0;
 function startLevel(L){
   App.freeMode=false;
   L=Math.max(1,Math.min(TOTAL_LEVELS,L|0));
-  let lv;
-  try{lv=generateCampaignLevel(L);}
-  catch(err){console.error('[startLevel] генерация',L,err);toast('ОШИБКА ГЕНЕРАЦИИ');return;}
+  let lv=null,err=null;
+  try{lv=generateCampaignLevel(L);}             // PRELOADED → мгновенно, без ожидания
+  catch(e){err=e;}
+  if(!lv){                                      // база недоступна/повреждена — фоновая достройка
+    console.warn('[startLevel] базы нет, фоновая генерация',L,err);
+    toast('СЕКТОР '+L+': ИДЁТ ФОНОВАЯ СБОРКА…');
+    SAVE.level=L;Store.save();                  // запоминаем намерение игрока для автозапуска
+    bgGenerate(L,()=>{                          // после готовности — автозапуск, если пользователь ещё ждёт
+      if(App.state==='LEVELS'||App.state==='MENU')startLevel(L);
+    });
+    return;
+  }
   launchLevel(lv);
   SAVE.level=L;Store.save();
 }
+/* Фоновая (неблокирующая) достройка уровня по частям ~40 солёных зёрен за кадр */
+const __bgBusy=new Set();
+function bgGenerate(L,onDone){
+  if(__bgBusy.has(L))return;__bgBusy.add(L);
+  const cfg=campaignConfig(L);let salt=0;
+  const step=()=>{
+    let raw=null,bad=false;
+    for(let i=0;i<40&&!bad;i++){
+      try{raw=genLevelRaw(L,cfg.w,cfg.h,cfg.mines,salt);}
+      catch(e){bad=true;break;}
+      if(raw&&validateSolvable(cfg.w,cfg.h,raw.grid,raw.safe))break;
+      salt++;
+      if(salt>5000){bad=true;break;}
+    }
+    if(bad||!raw||!validateSolvable(cfg.w,cfg.h,raw.grid,raw.safe)){
+      __bgBusy.delete(L);toast('СБОЙ ГЕНЕРАЦИИ СЕКТОРА '+L);return;
+    }
+    levelCache.set(L,{...cfg,grid:raw.grid,safe:raw.safe,id:L});
+    __bgBusy.delete(L);
+    toast('СЕКТОР '+L+' ГОТОВ');
+    if(onDone)onDone();
+  };
+  (function loop(){if(__bgBusy.has(L))requestAnimationFrame(()=>{step();if(__bgBusy.has(L))loop();});})();
+}
 
-/* --- запуск поля свободной игры: детерминированное генерирование
-       по выбранным настройкам, с проверкой решаемости валидатором R1–R4 --- */
+/* Прогресс-оверлей «идёт сборка поля» */
+function showGenOverlay(txt){
+  let ov=$('ovGen');
+  if(!ov){
+    ov=document.createElement('div');
+    ov.id='ovGen';ov.className='overlay show';ov.style.zIndex='40';
+    ov.innerHTML='<div class="panel" style="width:min(360px,80vw);text-align:center">'+
+      '<div class="t" id="genTxt" style="font-family:\'Orbitron\';letter-spacing:3px;color:var(--cyan);font-size:15px"></div>'+
+      '<div class="bar" style="width:200px;height:4px;margin:16px auto 0;background:rgba(0,243,255,.15);overflow:hidden">'+
+      '<i style="display:block;height:100%;width:30%;background:var(--cyan);box-shadow:0 0 12px var(--cyan);animation:load 1.1s ease-in-out infinite"></i></div></div>';
+    document.body.appendChild(ov);
+  }
+  $('genTxt').textContent='⚙ СБОРКА ПОЛЯ · '+txt;
+  ov.classList.add('show');ov.style.display='flex';
+}
+function hideGenOverlay(){const ov=$('ovGen');if(ov){ov.classList.remove('show');ov.style.display='none';}}
+
+/* --- запуск поля свободной игры: поле берётся МГНОВЕННО из базы
+       levels.json (все 16 комбинаций размер×сложность предвычислены и
+       проверены валидатором решаемости R1–R4 — угадывание не нужно).
+       Если базы нет — фоновая достройка, интерфейс не блокируется. --- */
 let FREE_SEL={size:0,diff:1};
+const __bgFreeBusy=new Set();
+function freeKeyOf(sizeIdx,diffIdx){return sizeIdx+'x'+diffIdx;}
 function startFreeLevel(){
-  App.freeMode=true;
-  const btn=$('btnFreeStart');
-  if(btn){btn.textContent='⚙ СБОРКА ПОЛЯ…';btn.disabled=true;}
-  // отдаём поток управления браузеру, чтобы кнопка успела перерисоваться
-  setTimeout(()=>{
-    let lv=null,err=null;
-    try{lv=generateFreeLevel(FREE_SEL.size,FREE_SEL.diff);}
-    catch(e){err=e;}
-    if(btn){btn.textContent='▶ Начать операцию';btn.disabled=false;}
-    if(err){console.error('[free] генерация',err);toast('СБОЙ ГЕНЕРАЦИИ: '+err.message);App.freeMode=false;return;}
-    launchLevel(lv);
-  },60);
+  const si=FREE_SEL.size,di=FREE_SEL.diff,key=freeKeyOf(si,di);
+  let lv=null,err=null;
+  try{lv=generateFreeLevel(si,di);}             // PRELOADED.free[key] → мгновенно
+  catch(e){err=e;}
+  if(!lv){
+    console.warn('[free] базы нет, фоновая генерация',key,err);
+    toast('ИДЁТ ФОНОВАЯ СБОРКА ПОЛЯ…');
+    bgGenerateFree(si,di);
+    return;
+  }
+  App.freeMode=true;                            // запуск засчитываем только при успехе
+  launchLevel(lv);
+}
+function bgGenerateFree(sizeIdx,diffIdx){
+  const key=freeKeyOf(sizeIdx,diffIdx);
+  if(__bgFreeBusy.has(key))return;__bgFreeBusy.add(key);
+  const cfg=freeConfig(sizeIdx,diffIdx);let salt=0;
+  const id=-(sizeIdx*10+diffIdx+1);
+  const step=()=>{
+    let raw=null,bad=false;
+    for(let i=0;i<25&&!bad;i++){
+      try{raw=genLevelRaw(id,cfg.w,cfg.h,cfg.mines,salt);}
+      catch(e){bad=true;break;}
+      if(raw&&validateSolvable(cfg.w,cfg.h,raw.grid,raw.safe))break;
+      salt++;
+      if(salt>3000)bad=true;
+    }
+    if(bad||!raw||!validateSolvable(cfg.w,cfg.h,raw.grid,raw.safe)){
+      __bgFreeBusy.delete(key);toast('СБОЙ ГЕНЕРАЦИИ ПОЛЯ');return;
+    }
+    freeCache.set(key,{...cfg,grid:raw.grid,safe:raw.safe,id:id,free:true,sizeIdx,diffIdx});
+    __bgFreeBusy.delete(key);
+    toast('ПОЛЕ ГОТОВО');
+    // автозапуск, если игрок всё ещё на экране свободной игры с теми же настройками
+    if(App.state==='FREE'&&FREE_SEL.size===sizeIdx&&FREE_SEL.diff===diffIdx){
+      App.freeMode=true;launchLevel(freeCache.get(key));
+    }
+  };
+  (function loop(){if(__bgFreeBusy.has(key))requestAnimationFrame(()=>{step();if(__bgFreeBusy.has(key))loop();});})();
 }
 
 /* --- общий конвейер запуска партии на 3D-сцене --- */
@@ -1347,6 +1512,7 @@ function renderMenuStats(){
    pointerup — основной путь (надёжно работает даже если click «теряется»
    из-за особенностей WebView/жестов); click — страховка для десктопа.
    Флаг done с таймаутом защищает от двойного срабатывания. */
+let curEon=0; // текущий эон в списке секторов (нужен фоновой достройке)
 function onTap(el,fn){
   let done=false;
   const fire=e=>{
@@ -1358,6 +1524,7 @@ function onTap(el,fn){
   el.addEventListener('click',fire);
 }
 function renderLevelGrid(eon){
+  curEon=eon|0;
   const ranges=[[1,20],[21,50],[51,TOTAL_LEVELS]];
   const[a,b]=ranges[eon];const box=$('lvlGrid');box.innerHTML='';
   for(let L=a;L<=b;L++){
@@ -1383,7 +1550,7 @@ function renderLevelGrid(eon){
 /* --- кнопки --- */
 function bindUI(){
   const inst=(sel,fn)=>document.querySelectorAll(sel).forEach(b=>{b.onclick=fn;b.addEventListener('pointerup',e=>{e.preventDefault();fn.call(b,e);});});
-  inst('#btnCampaign',()=>startLevel(SAVE.level));
+  inst("#btnCampaign",()=>{try{startLevel(Math.max(1,Math.min(TOTAL_LEVELS,SAVE.level|0)));}catch(e){console.error(e);toast("СБОЙ: "+e.message);}});
   inst('#btnFree',()=>{updateFreePreview();setState('FREE');});
   inst('#btnHelp',()=>setState('HELP'));
   inst('#btnHelpBack',()=>setState('MENU'));
@@ -1430,6 +1597,7 @@ function bindUI(){
   inst('#btnReplay',()=>{if(App.freeMode)startFreeLevel();else startLevel(App.game.levelId);});
   inst('#btnWinMenu',()=>setState('MENU'));
   inst('#btnSfx',()=>{S.sfx=!S.sfx;Store.save();updateSettingsUI();});
+  inst('#btnMusic',()=>{S.music=!S.music;Store.save();updateSettingsUI();if(S.music&&App.state==='MENU')musicStart();else if(!S.music)musicStop(0.2);});
   inst('#btnGlow',()=>{S.glow=!S.glow;applyGlow();Store.save();updateSettingsUI();});
   inst('#btnQuality',()=>{S.quality=!S.quality;App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));layout();Store.save();updateSettingsUI();});
   inst('#btnCam',()=>{S.perspective=!S.perspective;toggleProjection();Store.save();updateSettingsUI();});
@@ -1453,6 +1621,7 @@ function applyGlow(){
 }
 function updateSettingsUI(){
   $('btnSfx').textContent='Звук: '+(S.sfx?'ВКЛ':'ВЫКЛ');
+  $('btnMusic').textContent='Музыка: '+(S.music?'ВКЛ':'ВЫКЛ');
   $('btnGlow').textContent='Свечение: '+(S.glow?'ВКЛ':'ВЫКЛ');
   $('btnQuality').textContent='Качество: '+(S.quality?'ВЫСОКОЕ':'НИЗКОЕ');
   $('btnCam').textContent='Камера: '+(S.perspective?'ПЕРСПЕКТИВА':'ИЗОМЕТРИЯ');
@@ -1538,6 +1707,10 @@ function boot(ok3d){
     return;
   }
   bindInput();bindUI();
+  // Разблокировка WebAudio первым же касанием (требование браузеров/WebView) + старт музыки в меню
+  const unlockAudio=()=>{ensureAudio();if(App.state==='MENU')musicStart();};
+  addEventListener('pointerdown',unlockAudio,{capture:true,passive:true});
+  addEventListener('touchstart',unlockAudio,{capture:true,passive:true});
   // Фоновая демонстрационная доска в меню (уровень 1)
   try{
     App.game=new MinesGame(generateCampaignLevel(1));
@@ -1551,9 +1724,24 @@ function boot(ok3d){
     '\nСтруктура кампании:',(CAMPAIGN_JSON.length/1024).toFixed(1)+' КБ,',
     CAMPAIGN_DATA.count,'секторов, зерно:',CAMPAIGN_DATA.seed);
 }
-// Дожидаемся шрифтов и библиотек (Three.js обязателен, GSAP опционален)
+/* Дожидаемся шрифтов и библиотек (Three.js обязателен, GSAP опционален).
+   ВАЖНО: если window.__libsReady не появился (например, скрипт загрузчика
+   был обрезан/заблокирован), считаем состояние по факту: реально ли THREE
+   уже в window. Если его нет — даём до 6 секунд на «догоняющую» загрузку
+   через fallback-цепочку CDN, а затем показываем понятную ошибку вместо
+   вечно крутящегося экрана загрузки. */
+function __waitLibs(){
+  return new Promise(resolve=>{
+    if(window.THREE){resolve([true,!!window.gsap]);return;}
+    let waited=0;
+    const iv=setInterval(()=>{
+      if(window.THREE){clearInterval(iv);resolve([true,!!window.gsap]);}
+      else if((waited+=200)>=6000){clearInterval(iv);resolve([false,false]);}
+    },200);
+  });
+}
 Promise.all([
-  window.__libsReady||Promise.resolve([true,true]),
+  window.__libsReady||__waitLibs(),
   (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve())
 ]).then(function(res){
   const ok3d=Array.isArray(res[0])?res[0][0]:!!window.THREE;
