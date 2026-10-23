@@ -59,6 +59,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
    каскада — прячем оверлеи ТОЛЬКО через display:none. */
 .overlay{visibility:visible!important}
 .overlay.off{opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}
+/* Поверх 3D-сцены: без явного z-index в некоторых WebView оверлей меню
+   рисовался ПОД canvas'ом — «главное меню отсутствует». */
+.overlay.show{z-index:40}
+/* Гарантированная видимость кнопок: если касание дошло до кнопки, она
+   обязана быть кликабельной (в WebView залипший .off мог блокировать ввод). */
+.panel,.panel *{pointer-events:auto}
 .panel{width:min(560px,92vw);max-height:88vh;overflow-y:auto;padding:34px 30px;
   background:linear-gradient(160deg, rgba(12,18,24,.96), rgba(8,10,14,.96));
   border:1px solid var(--line);position:relative;
@@ -136,10 +142,10 @@ body.shake #scene{animation:shk .45s linear}
   <div class="chip lvl"><span class="lbl">Сектор</span><span class="val" id="uiLevel">1/100</span></div>
   <div class="chip mines"><span class="lbl">Мины</span><span class="val" id="uiMines">0</span></div>
   <div class="chip time"><span class="lbl">Время</span><span class="val" id="uiTime">0:00</span></div>
-  <div class="chip" id="btnPause" title="Мини-меню (пауза)"><span class="lbl">Меню</span><span class="val">≡</span></div>
-  <div class="chip" id="btnBack" title="Назад к мини-меню"><span class="lbl">Назад</span><span class="val">◄</span></div>
+  <div class="chip" id="btnPause" title="Мини-меню (пауза)" role="button" tabindex="0"><span class="lbl">Меню</span><span class="val">≡</span></div>
+  <div class="chip" id="btnBack" title="Назад к мини-меню" role="button" tabindex="0"><span class="lbl">Назад</span><span class="val">◄</span></div>
 </div>
-<div id="hintBar" class="hidden">ЛКМ — открыть · ПКМ — флаг/вопрос · СКМ или 2×тап по цифре — аккорд · удержание цифры — разведка</div>
+<div id="hintBar" class="hidden">Тап — открыть · долгое нажатие — флаг/вопрос · второй тап по цифре (флаги расставлены) — аккорд: открывает оставшиеся соседние клетки · удержание цифры — разведка</div>
 <div class="toast" id="toast"></div>
 
 <!-- ================= ГЛАВНОЕ МЕНЮ ================= -->
@@ -1028,7 +1034,7 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* --- перестройка мешей под состояние партии --- */
 const cHidden=new THREE.Color(0x1a242e),cOpen=new THREE.Color(0x0b0f14),cHot=new THREE.Color(0x39485a),cDead=new THREE.Color(0x2a0d12);
 function syncTiles(idsChanged){
-  App.W=App.game.w;App.hFix=App.game.h;App.SZ=1;
+  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
   for(let id=0;id<g.total;id++){
     const st=g.state[id];
@@ -1063,15 +1069,24 @@ function finishInst(mesh){
 }
 
 /* --- спрайты цифр --- */
+let _numCanvas=document.createElement('canvas');_numCanvas.width=_numCanvas.height=128;
 function makeNumTexture(n){
-  const c=document.createElement('canvas');c.width=c.height=128;
-  const x=c.getContext('2d');
+  const x=_numCanvas.getContext('2d');
+  x.clearRect(0,0,128,128);
   x.font='900 92px Orbitron, sans-serif';x.textAlign='center';x.textBaseline='middle';
   const col='#'+new THREE.Color(COLORS.nums[n-1]).getHexString();
   x.shadowColor=col;x.shadowBlur=22;
   x.fillStyle=col;x.fillText(String(n),64,70);
   x.shadowBlur=6;x.fillText(String(n),64,70);
-  const t=new THREE.CanvasTexture(c);
+  // ВАЖНО: текстура создаётся ОДИН раз на цифру. Раньше для каждой клетки
+  // создавался свой THREE.CanvasTexture над одним и тем же canvas — WebGL r128
+  // зацикливал выгрузку такого «разделяемого» изображения, и цифры мигали
+  // (видны лишь кадр после загрузки уровня / открытия клетки).
+  const t=new THREE.CanvasTexture(_numCanvas);
+  if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
+  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;
+  t.generateMipmaps=false;
+  t.needsUpdate=true;
   return t;
 }
 const numTexCache={};
@@ -1088,15 +1103,18 @@ function updateNumbers(){
   const g=App.game;
   if(!numGeometry){numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);}
   const geo=numGeometry;
+  // Цифры всегда ПОВЕРХ плиток и флагов: иначе на части GPU (Android WebView)
+  // z-fighting с плиткой делал их видимыми лишь на мгновение.
   for(let id=0;id<g.total;id++){
     const v=g.grid[id];
     if(g.state[id]===1&&v>0){
       if(!numTexCache[v])numTexCache[v]=makeNumTexture(v);
-      const m=new THREE.MeshBasicMaterial({map:numTexCache[v],transparent:true,depthWrite:false});
+      const m=new THREE.MeshBasicMaterial({map:numTexCache[v],transparent:true,depthWrite:false,toneMapped:false});
       const sp=new THREE.Mesh(geo,m);
       const p=cellPos(id);
-      sp.position.set(p.x,0.09*App.SZ+0.02,p.z);
+      sp.position.set(p.x,0.09*App.SZ+0.06,p.z);
       sp.scale.setScalar(App.SZ*0.72);
+      sp.renderOrder=999;
       App.scene.add(sp);App.numbers.push(sp);
     }
   }
@@ -1301,10 +1319,41 @@ addEventListener('touchmove',e=>{
 },{passive:true});
 
 /* --- действия --- */
+/* «Мягкий аккорд»: один тап по уже открытой цифре. Если флагов вокруг
+   меньше, чем число, НЕ блокируем аккорд — временно снимаем метки «?»,
+   открываем все НЕОТМЕЧЕННЫЕ флажком соседей и восстанавливаем их метки.
+   Это ровно то, что ждёт игрок: «нажал на цифру — открылись остальные
+   клетки». Взрыв при этом засчитывается честно (под флагом мина не вскрывается). */
+function doSoftChord(id){
+  const g=App.game;if(g.dead||g.won)return false;
+  if(g.state[id]!==1||g.grid[id]<=0)return false;
+  const ns=g.nb(id);
+  const hidden=ns.filter(n=>g.state[n]===0||g.state[n]===3);
+  if(!hidden.length)return true; // флаги уже стоят везде — делать нечего
+  const savedMarks=[];
+  for(const n of hidden)if(g.state[n]===3){g.state[n]=0;savedMarks.push(n);}
+  let boom=false;
+  for(const n of hidden){
+    if(g.grid[n]===-1){g.state[n]=1;g.dead=true;g.exploded=n;boom=true;}
+    else g.flood(n);
+  }
+  for(const n of savedMarks)if(g.state[n]===0)g.state[n]=3;
+  if(boom){onDefeat(g.exploded);return true;}
+  if(!boom)g.checkWin();
+  SFX.chord();animateRevealed(id);refreshHud();checkVictory();
+  return true;
+}
 function doReveal(id){
   const g=App.game;if(g.dead||g.won)return;
   if(g.state[id]!==0){
-    if(g.state[id]===1&&g.grid[id]>0)SFX.error();
+    if(g.state[id]===1&&g.grid[id]>0){
+      // Одиночный тап по цифре = аккорд по непомеченным соседям.
+      // Если флагов вокруг ровно столько, сколько число — срабатывает
+      // строгий аккорд (g.chord), иначе — «мягкий»: открываются все
+      // соседи без флагов. Раньше при несовпадении числа и флагов
+      // просто играл звук ошибки и ничего не происходило.
+      if(!doSoftChord(id))SFX.error();
+    }
     return;
   }
   const r=g.reveal(id);
@@ -1348,6 +1397,20 @@ const $=id=>document.getElementById(id);
 const OV={menu:$('ovMenu'),levels:$('ovLevels'),free:$('ovFree'),help:$('ovHelp'),settings:$('ovSettings'),pause:$('ovPause'),over:$('ovOver'),win:$('ovWin')};
 function forceHide(el){if(!el)return;el.classList.remove('show');el.classList.add('off');}
 function forceShow(el){if(!el)return;el.classList.remove('off');T.uiShow(el);}
+/* Аварийный клик по области главного меню: если по какой-то причине
+   обработчики кнопок не получили событие (WebView/жесты), уровень всё
+   равно запустится по тапу в зоне первой кнопки. */
+(function(){
+  const m=document.getElementById('ovMenu');
+  if(m)m.addEventListener('click',e=>{
+    if(App.state!=='MENU')return;
+    const t=e.target.closest?e.target.closest('.btn'):null;
+    if(t||e.target===m){
+      // тап по фону меню = «Кампания» (самое частое действие)
+      if(e.target===m){try{startLevel(Math.max(1,Math.min(TOTAL_LEVELS,SAVE.level|0)));}catch(err){console.error(err);}}
+    }
+  });
+})();
 function showOverlay(name){
   for(const k in OV){const on=(k===name);on?forceShow(OV[k]):forceHide(OV[k]);}
 }
