@@ -145,7 +145,7 @@ body.shake #scene{animation:shk .45s linear}
   <div class="chip" id="btnPause" title="Мини-меню (пауза)" role="button" tabindex="0"><span class="lbl">Меню</span><span class="val">≡</span></div>
   <div class="chip" id="btnBack" title="Назад к мини-меню" role="button" tabindex="0"><span class="lbl">Назад</span><span class="val">◄</span></div>
 </div>
-<div id="hintBar" class="hidden">Тап — открыть · долгое нажатие — флаг/вопрос · второй тап по цифре (флаги расставлены) — аккорд: открывает оставшиеся соседние клетки · удержание цифры — разведка</div>
+<div id="hintBar" class="hidden">Тап — открыть · долгое нажатие — флаг · тап по цифре — аккорд: если вокруг стоит нужное число флагов (или больше), откроются все клетки без флагов рядом · меньше флагов — аккорд не сработает</div>
 <div class="toast" id="toast"></div>
 
 <!-- ================= ГЛАВНОЕ МЕНЮ ================= -->
@@ -221,15 +221,15 @@ body.shake #scene{animation:shk .45s linear}
     <h2>Управление (ПК)</h2>
     <ul>
       <li><kbd>ЛКМ</kbd> — открыть клетку.</li>
-      <li><kbd>ПКМ</kbd> — цикл: <span style="color:var(--yellow)">флаг</span> → <span style="color:var(--magenta)">вопрос</span> → пусто.</li>
-      <li><kbd>СКМ</kbd> или двойной клик по числу — <b>аккорд</b>: если вокруг числа стоит столько флагов, каково число, соседние клетки открываются.</li>
+      <li><kbd>ПКМ</kbd> — поставить / снять флаг (режима «?» больше нет).</li>
+      <li><kbd>СКМ</kbd> или двойной клик по числу — <b>аккорд</b>: если вокруг числа стоит <i>не меньше</i> флагов, чем само число, все соседние клетки без флагов открываются. Меньше флагов — аккорд не срабатывает.</li>
       <li><b>Удержание ЛКМ</b> на числе — «разведка»: подсветка соседей без открытия.</li>
       <li><kbd>Esc</kbd> — пауза.</li>
     </ul>
     <h2>Управление (мобильные)</h2>
     <ul>
       <li><b>Тап</b> — открыть клетку.</li>
-      <li><b>Долгое нажатие</b> (≈0.45 с) — флаг/вопрос.</li>
+      <li><b>Долгое нажатие</b> (≈0.45 с) — флаг. Ещё раз по той же клетке — снять.</li>
       <li><b>Двойной тап</b> по числу — аккорд.</li>
       <li><b>Удержание</b> на числе — разведка соседей.</li>
       <li>Камера: перетаскивание — вращение, щипок/колесо — масштаб.</li>
@@ -770,13 +770,19 @@ class MinesGame{
   }
   toggleFlag(id){
     if(this.dead||this.won||this.state[id]===1)return null;
-    this.state[id]={0:2,2:3,3:0}[this.state[id]];
+    // Двойное нажатие больше НЕ переключает в «вопрос» (?) — по просьбе
+    // игрока этот режим убран: цикл теперь просто флаг <-> скрыто.
+    this.state[id]=(this.state[id]===2)?0:2;
     return this.state[id];
   }
   chord(id){
     if(this.dead||this.won||this.state[id]!==1||this.grid[id]<=0)return null;
     const ns=this.nb(id);
-    if(ns.filter(n=>this.state[n]===2).length!==this.grid[id])return null;
+    const flags=ns.filter(n=>this.state[n]===2).length;
+    // Ровно нужное число флагов или больше — аккорд срабатывает и открывает
+    // всех немеченых соседей (при лишних флагах игрок наказывается взрывом,
+    // если под одним из «правильных» флагов мины нет). Меньше нужного — блок.
+    if(flags<this.grid[id])return null;
     let boom=false;
     for(const n of ns)if(this.state[n]===0||this.state[n]===3){
       // Клетка с вопросом не должна блокировать аккорд: перед открытием
@@ -923,13 +929,13 @@ function musicStop(fade){
 /* ================= [6] 3D-СЦЕНА THREE.JS ================= */
 const COLORS={
   bg:0x0a0a0a,cyan:0x00f3ff,magenta:0xff00ff,yellow:0xffee00,
-  tileTop:0x141a22,tileSide:0x0d1117,
+  tileTop:0x2b3442,tileSide:0x161c26,
   nums:[0x00f3ff,0x3dff8a,0xffee00,0xff9d00,0xff00ff,0x7df9ff,0xffffff,0xff2d55]
 };
 const App={
   renderer:null,scene:null,camera:null,raycaster:new THREE.Raycaster(),
   pointerNdc:new THREE.Vector2(),
-  tiles:null,flags:null,marks:null,glows:null,board:null,plate:null,
+  tiles:null,flags:null,fuses:null,marks:null,glows:null,board:null,plate:null,
   numbers:[],particles:null,pGeo:null,pMat:null,
   W:0,H:0,SZ:1,game:null,state:'MENU',
   camAz:0.9,camEl:0.95,camDist:24,target:{x:0,y:0,z:0},
@@ -977,15 +983,20 @@ function initScene(){
 
   // Инстанс-меши: плитки / флаги / вопросы / подсветка
   const tileGeo=new THREE.BoxGeometry(1,1,1);
-  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.55,metalness:0.55});
+  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.42,metalness:0.35});
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
 
   const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
-  const flagGeo=new THREE.ExtrudeGeometry(tri,{depth:0.02,bevelEnabled:false});flagGeo.rotateX(-Math.PI/2);flagGeo.translate(0,0.55,0);
-  App.flags=new THREE.InstancedMesh(flagGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),28*28);
+  // Маркер-«бомба» вместо треугольного флага: тёмная сфера с неоновым
+  // бликом и коротким штырьком сверху (цилиндр + конус).
+  const bombGeo=new THREE.SphereGeometry(0.26,12,10);bombGeo.translate(0,0.52,0);
+  App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),28*28);
   App.scene.add(App.flags);
+  const fuseGeo=new THREE.CylinderGeometry(0.05,0.05,0.18,6);fuseGeo.translate(0,0.82,0);
+  App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshStandardMaterial({color:0x1a1a1a,emissive:0xffee00,emissiveIntensity:0.5,roughness:0.6}),28*28);
+  App.scene.add(App.fuses);
 
   const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
   App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),28*28);
@@ -1032,7 +1043,9 @@ function setDeco(mesh,id,on,lift,color,scl){
 }
 
 /* --- перестройка мешей под состояние партии --- */
-const cHidden=new THREE.Color(0x1a242e),cOpen=new THREE.Color(0x0b0f14),cHot=new THREE.Color(0x39485a),cDead=new THREE.Color(0x2a0d12);
+/* Кубы: приятная «тёплая сталь» с лёгким бирюзовым отливом (были слишком
+   тёмные и грязно-синие). Открытая клетка — глубокий графит, подсветка — светлее. */
+const cHidden=new THREE.Color(0x39445a),cOpen=new THREE.Color(0x121821),cHot=new THREE.Color(0x5d6f8c),cDead=new THREE.Color(0x2a0d12);
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
@@ -1051,13 +1064,13 @@ function syncTiles(idsChanged){
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
 
   // флаги / вопросы / подсветка
-  App.flags._n=0;App.marks._n=0;App.glows._n=0;
+  App.flags._n=0;App.marks._n=0;App.glows._n=0;App.fuses._n=0;
   for(let id=0;id<g.total;id++){
-    if(g.state[id]===2)setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));
+    if(g.state[id]===2){setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);}
     if(g.state[id]===3)setDeco(App.marks,id,true,0,new THREE.Color(COLORS.magenta));
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
-  finishInst(App.flags);finishInst(App.marks);finishInst(App.glows);
+  finishInst(App.flags);finishInst(App.marks);finishInst(App.glows);finishInst(App.fuses);
   updateNumbers();
 }
 function finishInst(mesh){
@@ -1069,20 +1082,22 @@ function finishInst(mesh){
 }
 
 /* --- спрайты цифр --- */
-let _numCanvas=document.createElement('canvas');_numCanvas.width=_numCanvas.height=128;
+/* ВАЖНО (почему цифры раньше мигали): все CanvasTexture создавались над ОДНИМ
+   и тем же canvas. В WebGL при каждой перерисовке кадра такие текстуры заново
+   выгружают пиксели из canvas — а в момент между очисткой и отрисовкой GPU
+   видел пустой canvas, и цифры исчезали (были видны лишь кадр после открытия).
+   Теперь для КАЖДОЙ цифры свой собственный canvas + своя текстура: содержимое
+   неизменно, цифры видны постоянно. */
 function makeNumTexture(n){
-  const x=_numCanvas.getContext('2d');
+  const cv=document.createElement('canvas');cv.width=cv.height=128;
+  const x=cv.getContext('2d');
   x.clearRect(0,0,128,128);
-  x.font='900 92px Orbitron, sans-serif';x.textAlign='center';x.textBaseline='middle';
+  x.font='900 92px Orbitron, Rajdhani, sans-serif';x.textAlign='center';x.textBaseline='middle';
   const col='#'+new THREE.Color(COLORS.nums[n-1]).getHexString();
   x.shadowColor=col;x.shadowBlur=22;
   x.fillStyle=col;x.fillText(String(n),64,70);
   x.shadowBlur=6;x.fillText(String(n),64,70);
-  // ВАЖНО: текстура создаётся ОДИН раз на цифру. Раньше для каждой клетки
-  // создавался свой THREE.CanvasTexture над одним и тем же canvas — WebGL r128
-  // зацикливал выгрузку такого «разделяемого» изображения, и цифры мигали
-  // (видны лишь кадр после загрузки уровня / открытия клетки).
-  const t=new THREE.CanvasTexture(_numCanvas);
+  const t=new THREE.CanvasTexture(cv);
   if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
   t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;
   t.generateMipmaps=false;
@@ -1258,7 +1273,7 @@ function onDown(e){
   longFired=false;
   if(e.button===1){ // средняя кнопка — аккорд
     e.preventDefault();
-    if(id>=0&&App.game&&App.game.state[id]===1)doChord(id);
+    if(id>=0&&App.game&&App.game.state[id]===1)tryChord(id);
     return;
   }
   if(e.button===2){ // правая — флаг (по событию up, чтобы не конфликтовать с камерой)
@@ -1273,7 +1288,7 @@ function onDown(e){
     longFired=true;
     const g=App.game;if(!g||g.dead||g.won)return;
     if(g.state[id]===1&&g.grid[id]>0){App.peekIds=g.nb(id);syncTiles();SFX.reveal();}
-    else if(g.state[id]===0||g.state[id]===2||g.state[id]===3){doFlag(id);}
+    else if(g.state[id]===0||g.state[id]===2){doFlag(id);}
   },450);
 }
 function onMove(e){
@@ -1302,7 +1317,7 @@ function onUp(e){
   // двойной тап/клик по числу => аккорд
   if((e.pointerType==='touch'||e.detail>=2)&&g.state[id]===1&&g.grid[id]>0){
     if(App.lastTap.id===id&&performance.now()-App.lastTap.t<420){
-      App.lastTap={id:-1,t:0};doChord(id);return;
+      App.lastTap={id:-1,t:0};tryChord(id);return;
     }
     App.lastTap={id,t:performance.now()};
   }
@@ -1319,41 +1334,30 @@ addEventListener('touchmove',e=>{
 },{passive:true});
 
 /* --- действия --- */
-/* «Мягкий аккорд»: один тап по уже открытой цифре. Если флагов вокруг
-   меньше, чем число, НЕ блокируем аккорд — временно снимаем метки «?»,
-   открываем все НЕОТМЕЧЕННЫЕ флажком соседей и восстанавливаем их метки.
-   Это ровно то, что ждёт игрок: «нажал на цифру — открылись остальные
-   клетки». Взрыв при этом засчитывается честно (под флагом мина не вскрывается). */
-function doSoftChord(id){
+/* Аккорд по правилам классического сапёра (по ТЗ игрока):
+   - флагов вокруг цифры РОВНО столько, сколько цифра требует -> открываются
+     все соседи без флагов (строгий аккорд g.chord);
+   - флагов МЕНЬШЕ нужного -> аккорд НЕ срабатывает, ничего не открывается
+     (только подсветка-подсказка клетки);
+   - флагов БОЛЬШЕ нужного -> открываются все соседи без флагов (наказание за
+     лишние метки; если под «правильным» флагом мины нет — засчитывается взрыв).
+   Одиночный тап по цифре = попытка аккорда; двойной тап и средняя кнопка — тоже. */
+function tryChord(id){
   const g=App.game;if(g.dead||g.won)return false;
   if(g.state[id]!==1||g.grid[id]<=0)return false;
   const ns=g.nb(id);
-  const hidden=ns.filter(n=>g.state[n]===0||g.state[n]===3);
-  if(!hidden.length)return true; // флаги уже стоят везде — делать нечего
-  const savedMarks=[];
-  for(const n of hidden)if(g.state[n]===3){g.state[n]=0;savedMarks.push(n);}
-  let boom=false;
-  for(const n of hidden){
-    if(g.grid[n]===-1){g.state[n]=1;g.dead=true;g.exploded=n;boom=true;}
-    else g.flood(n);
-  }
-  for(const n of savedMarks)if(g.state[n]===0)g.state[n]=3;
-  if(boom){onDefeat(g.exploded);return true;}
-  if(!boom)g.checkWin();
+  const flags=ns.filter(n=>g.state[n]===2).length;
+  if(flags<g.grid[id]){SFX.error();pulseTile(id);return false;} // мало флагов — не срабатывает
+  const r=g.chord(id); // chord() при flags>=digit откроет всех немеченых соседей
+  if(r==='boom'){SFX.chord();onDefeat(g.exploded);return true;}
+  if(r===null){SFX.error();return false;}
   SFX.chord();animateRevealed(id);refreshHud();checkVictory();
   return true;
 }
 function doReveal(id){
   const g=App.game;if(g.dead||g.won)return;
   if(g.state[id]!==0){
-    if(g.state[id]===1&&g.grid[id]>0){
-      // Одиночный тап по цифре = аккорд по непомеченным соседям.
-      // Если флагов вокруг ровно столько, сколько число — срабатывает
-      // строгий аккорд (g.chord), иначе — «мягкий»: открываются все
-      // соседи без флагов. Раньше при несовпадении числа и флагов
-      // просто играл звук ошибки и ничего не происходило.
-      if(!doSoftChord(id))SFX.error();
-    }
+    if(g.state[id]===1&&g.grid[id]>0)tryChord(id);
     return;
   }
   const r=g.reveal(id);
@@ -1374,16 +1378,11 @@ function doFlag(id){
   const g=App.game;if(g.dead||g.won)return;
   const r=g.toggleFlag(id);
   if(r===null){SFX.error();return;}
+  // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
   r===2?SFX.flag():SFX.unflag();
   syncTiles();refreshHud();checkVictory();
 }
-function doChord(id){
-  const g=App.game;if(g.dead||g.won)return;
-  const r=g.chord(id);
-  if(r===null){SFX.error();pulseTile(id);return;}
-  if(r==='boom'){SFX.chord();onDefeat(g.exploded);return;}
-  SFX.chord();syncTiles();refreshHud();checkVictory();
-}
+function doChord(id){tryChord(id);}
 function pulseTile(id){
   if(!window.gsap)return;
   const o={k:0};
@@ -1707,6 +1706,7 @@ function updateFreePreview(){
 function startTimerKeep(){App.startTs=Date.now()-App.time*1000;startTimer();}
 function applyGlow(){
   App.flags.material.emissiveIntensity=S.glow?0.9:0.15;
+  if(App.fuses)App.fuses.material.emissiveIntensity=S.glow?0.7:0.2;
   App.marks.material.emissiveIntensity=S.glow?0.8:0.15;
   App.glows.material.opacity=S.glow?0.34:0.12;
 }
