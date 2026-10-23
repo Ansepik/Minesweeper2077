@@ -791,19 +791,21 @@ class MinesGame{
     if(this.dead||this.won||this.state[id]!==1||this.grid[id]<=0)return null;
     const ns=this.nb(id);
     const flagIds=ns.filter(n=>this.state[n]===2);
+    const need=this.grid[id];
     const flags=flagIds.length;
-    // ПРАВИЛА АККОРДА (по ТЗ игрока): флагов РОВНО столько, сколько требует
-    // цифра -> открываются все соседи без флагов; меньше ИЛИ больше нужного
-    // -> аккорд НЕ срабатывает, ничего не открывается.
-    if(flags!==this.grid[id])return null;
+    /* ПРАВИЛА АККОРДА (ТЗ игрока, финальная редакция):
+       - флагов МЕНЬШЕ нужного          -> аккорд НЕ срабатывает (null);
+       - флагов РОВНО нужно            -> открываются все соседи без флагов;
+       - флагов БОЛЬШЕ нужного         -> тоже срабатывает и открывает всех
+         немеченых соседей (ошибочный лишний флаг наказуем взрывом). */
+    if(flags<need)return null;
     let boom=false;
     // запоминаем, какие клетки были ФЛАГАМИ до аккорда — чтобы метки-бомбы
     // остались на них после открытия (иначе «поставил флаг, открыл аккордом —
     // флага не видно»)
     this._chordFlags=flagIds;
-    // Подтверждённые мины: флаг стоит ровно там, где цифра его требует и
-    // аккорд сработал — такая метка-бомба остаётся на поле даже после
-    // авто-открытия всех мин при победе.
+    // Подтверждённые мины: под флагом реально мина, и аккорд сработал —
+    // метка-бомба остаётся на клетке навсегда (в т.ч. после победы/смерти).
     this.confirmed=this.confirmed||new Set();
     for(const f of flagIds)if(this.grid[f]===-1)this.confirmed.add(f);
     for(const n of ns)if(this.state[n]===0||this.state[n]===3){
@@ -1247,10 +1249,16 @@ const T={
      явный открытый цвет и цвета инстансов принудительно обновляются. */
   flipIn(id,delay){
     const o={y:1};
-    const upd=()=>{setTile(id,o.y,1);App.tiles.instanceMatrix.needsUpdate=true;};
-    const done=()=>{setTile(id,0.16,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;};
+    /* КЛЮЧЕВОЙ ФИКС «цифры мелькают и исчезают»: раньше во время твина
+       setTile вызывался БЕЗ цвета, а GPU-инстанс плитки оставался с цветом
+       скрытой клетки; при некоторых состояниях камеры/материала цифра на
+       плоскости оказывалась визуально «под» плиткой. Теперь плитка красится
+       в открытый цвет СРАЗУ при постановке state=1 (см. reveal/doReveal) и
+       перекрашивается на КАЖДОМ кадре анимации — цифра видна непрерывно. */
+    const upd=()=>{setTile(id,o.y,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;};
+    const done=()=>{setTile(id,0.16,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;updateNumbers();};
     if(window.gsap)gsap.to(o,{y:0.16,duration:0.42,delay,ease:'back.out(1.7)',onUpdate:upd,onComplete:done});
-    else{o.y=0.16;done();}
+    else{o.y=0.16;upd();done();}
   },
   popFlag(id,delay){
     if(window.gsap&&App.flags)gsap.fromTo({s:0},{s:1,duration:0.4,delay,ease:'back.out(2.5)',onUpdate:()=>syncTiles()},{immediateRender:false});
@@ -1435,7 +1443,7 @@ function tryChord(id){
   if(g.state[id]!==1||g.grid[id]<=0)return false;
   const ns=g.nb(id);
   const flags=ns.filter(n=>g.state[n]===2).length;
-  if(flags!==g.grid[id]){SFX.error();pulseTile(id);return false;} // флагов != цифра — аккорд не срабатывает
+  if(flags<g.grid[id]){SFX.error();pulseTile(id);return false;} // флагов меньше цифры — аккорд не срабатывает
   const r=g.chord(id); // chord() при flags>=digit откроет всех немеченых соседей
   if(r==='boom'){SFX.chord();onDefeat(g.exploded);return true;}
   if(r===null){SFX.error();return false;}
@@ -1453,6 +1461,12 @@ function doReveal(id){
   const r=g.reveal(id);
   if(r==='boom'){onDefeat(id);return;}
   SFX.reveal();
+  /* ФИКС «плитки не прожимаются / цифра не появляется»: как только клетка
+     открыта (state=1), СРАЗУ красим ВСЕ открытые клетки в явный открытый
+     цвет и обновляем GPU-атрибуты — не дожидаясь окончания GSAP-твина. */
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  App.tiles.instanceMatrix.needsUpdate=true;
+  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   animateRevealed(id);
   refreshHud();checkVictory();
 }
@@ -1480,7 +1494,7 @@ function doFlag(id){
   const r=g.toggleFlag(id);
   if(r===null){SFX.error();return;}
   // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
-  if(r===2)App.bombMarks.add(id);
+  if(r===2)App.bombMarks.add(id);else App.bombMarks.delete(id);
   r===2?SFX.flag():SFX.unflag();
   syncTiles();refreshHud();checkVictory();
 }
@@ -1530,7 +1544,7 @@ function setState(st){
     const playing=(st==='PLAYING');
   $('hud').classList.toggle('hidden',!(playing||st==='PAUSED'||st==='OVER'||st==='WIN'));
   $('hintBar').classList.toggle('hidden',!playing);
-  if(st==='MENU'){hideAllOverlays();menuBackdrop();T.uiShow(OV.menu);stopTimer();renderMenuStats();try{musicStart();}catch(e){console.warn('[music]',e);}}
+  if(st==='MENU'){hideAllOverlays();menuBackdrop();forceShow(OV.menu);stopTimer();renderMenuStats();try{musicStart();}catch(e){console.warn('[music]',e);}}
   /* «Лунная соната» играет ВСЕГДА: и в главном меню, и во время прохождения уровня.
      Музыка глушится только когда игрок сам выключил её в настройках (S.music=false). */
   else {try{if(S.music)musicStart();else musicStop();}catch(e){console.warn('[music]',e);}}
