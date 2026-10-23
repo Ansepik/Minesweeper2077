@@ -801,6 +801,11 @@ class MinesGame{
     // остались на них после открытия (иначе «поставил флаг, открыл аккордом —
     // флага не видно»)
     this._chordFlags=flagIds;
+    // Подтверждённые мины: флаг стоит ровно там, где цифра его требует и
+    // аккорд сработал — такая метка-бомба остаётся на поле даже после
+    // авто-открытия всех мин при победе.
+    this.confirmed=this.confirmed||new Set();
+    for(const f of flagIds)if(this.grid[f]===-1)this.confirmed.add(f);
     for(const n of ns)if(this.state[n]===0||this.state[n]===3){
       // Клетка с вопросом не должна блокировать аккорд: перед открытием
       // возвращаем её в обычное скрытое состояние.
@@ -1117,7 +1122,7 @@ function syncTiles(idsChanged){
     // аккорде g.chord() превращает флаги в открытые клетки (state=1) —
     // бомба исчезала с поля. Теперь бомбы остаются и на клетках, которые
     // были помечены и открыты аккордом (grid>=0 гарантирует: там нет мины).
-    if(g.state[id]===2||(g.state[id]===1&&g.grid[id]>=0&&App.bombMarks.has(id))){
+    if(g.state[id]===2||(g.state[id]===1&&(App.bombMarks.has(id)||(g.confirmed&&g.confirmed.has(id))))){
       setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);
     }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
@@ -1560,7 +1565,7 @@ function launchLevel(lv){
   let g;
   try{g=new MinesGame(lv);}
   catch(err){console.error('[launch] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
-  App.game=g;App.time=0;App.peekIds=null;
+  App.game=g;App.time=0;App.peekIds=null;App.bombMarks=new Set();
   hideAllOverlays();            // меню НЕ должно остаться поверх игры (главный фикс)
   try{buildBoard();}
   catch(err){console.error('[launch] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
