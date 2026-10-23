@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Неоновый «флаг-мост» CyberSweep: тёмный фон + циановый куб с маджентовым флагом -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M34,62 L54,72 L74,62 L54,52 Z" android:fillColor="#00f3ff"/>
+    <path android:pathData="M34,62 L34,44 L54,34 L54,52 Z" android:fillColor="#0aa8b8"/>
+    <path android:pathData="M74,62 L74,44 L54,34 L54,52 Z" android:fillColor="#066d78"/>
+    <path android:pathData="M54,30 L54,50" android:strokeColor="#ffffff" android:strokeWidth="3"/>
+    <path android:pathData="M55,30 L70,35 L55,42 Z" android:fillColor="#ff00ff"/>
+</vector>

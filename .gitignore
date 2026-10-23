@@ -1,0 +1,9 @@
+*.apk
+android-app/.gradle/
+android-app/**/build/
+android-app/local.properties
+*.lock
+*.log
+*.jks
+*.keystore
+*.p12
