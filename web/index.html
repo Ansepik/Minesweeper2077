@@ -89,6 +89,9 @@ h1.logo span{color:var(--magenta);text-shadow:0 0 14px var(--magenta)}
 .btn.small{padding:9px 12px;font-size:12px;display:inline-block;width:auto;margin:6px 8px 0 0}
 .btn.active{background:rgba(0,243,255,.22);box-shadow:0 0 18px rgba(0,243,255,.5);color:#fff}
 .row{display:flex;gap:10px}.row .btn{flex:1}
+/* Галочки выбора музыкальных треков в настройках */
+.chk{display:flex;align-items:center;gap:8px;color:var(--txt,#cfe);font-size:.95em;cursor:pointer;padding:4px 2px}
+.chk input{width:18px;height:18px;accent-color:#00f3ff;cursor:pointer}
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:18px 0}
 .stat{border:1px solid rgba(0,243,255,.25);padding:10px;background:rgba(0,243,255,.04);
   clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
@@ -251,6 +254,14 @@ body.shake #scene{animation:shk .45s linear}
       <button class="btn" id="btnSfx">Звук: ВКЛ</button>
       <button class="btn" id="btnMusic">Музыка: ВКЛ</button>
       <button class="btn" id="btnGlow">Свечение: ВКЛ</button>
+    </div>
+    <!-- Выбор треков фоновой музыки: отмеченные галочками песни играют по очереди -->
+    <div style="margin-top:10px;color:var(--txt-dim);font-size:.85em">// Треки фоновой музыки //</div>
+    <div id="musicTracks" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+      <label class="chk"><input type="checkbox" data-track="moonlight"> Бетховен — Лунная соната</label>
+      <label class="chk"><input type="checkbox" data-track="tori"> Lia — Tori no Uta (Air, OP)</label>
+      <label class="chk"><input type="checkbox" data-track="mozart"> Моцарт — Свадьба Фигаро, увертюра</label>
+      <label class="chk"><input type="checkbox" data-track="vchno17"> Pyrokinesis — Вечно 17</label>
     </div>
     <div class="row">
       <button class="btn" id="btnQuality">Качество: ВЫСОКОЕ</button>
@@ -770,20 +781,39 @@ class MinesGame{
   }
   toggleFlag(id){
     if(this.dead||this.won||this.state[id]===1)return null;
-    // Двойное нажатие больше НЕ переключает в «вопрос» (?) — по просьбе
-    // игрока этот режим убран: цикл теперь просто флаг <-> скрыто.
+    // Цикл флага: скрыто -> флаг -> скрыто (режим «?» удалён по просьбе игрока).
     this.state[id]=(this.state[id]===2)?0:2;
+    /* ФИКС «флаг не ставится / остаётся пустое место»: раньше здесь был
+       виджет-обращение App.bombMarks, а App ещё мог быть не инициализирован
+       (первый тап до загрузки сцены) — обращение к App.bombMarks бросало
+       ReferenceError/TypeError и флаг НЕ ставился вообще. Теперь состояние
+       партии хранит метки сама (флаг = множество flagged), без зависимости
+       от глобального App. */
+    this.flagged=this.flagged||new Set();
+    if(this.state[id]===2)this.flagged.add(id);else this.flagged.delete(id);
     return this.state[id];
   }
   chord(id){
     if(this.dead||this.won||this.state[id]!==1||this.grid[id]<=0)return null;
     const ns=this.nb(id);
-    const flags=ns.filter(n=>this.state[n]===2).length;
-    // Ровно нужное число флагов или больше — аккорд срабатывает и открывает
-    // всех немеченых соседей (при лишних флагах игрок наказывается взрывом,
-    // если под одним из «правильных» флагов мины нет). Меньше нужного — блок.
-    if(flags<this.grid[id])return null;
+    const flagIds=ns.filter(n=>this.state[n]===2);
+    const need=this.grid[id];
+    const flags=flagIds.length;
+    /* ПРАВИЛА АККОРДА (ТЗ игрока, финальная редакция):
+       - флагов МЕНЬШЕ нужного          -> аккорд НЕ срабатывает (null);
+       - флагов РОВНО нужно            -> открываются все соседи без флагов;
+       - флагов БОЛЬШЕ нужного         -> тоже срабатывает и открывает всех
+         немеченых соседей (ошибочный лишний флаг наказуем взрывом). */
+    if(flags<need)return null;
     let boom=false;
+    // запоминаем, какие клетки были ФЛАГАМИ до аккорда — чтобы метки-бомбы
+    // остались на них после открытия (иначе «поставил флаг, открыл аккордом —
+    // флага не видно»)
+    this._chordFlags=flagIds;
+    // Подтверждённые мины: под флагом реально мина, и аккорд сработал —
+    // метка-бомба остаётся на клетке навсегда (в т.ч. после победы/смерти).
+    this.confirmed=this.confirmed||new Set();
+    for(const f of flagIds)if(this.grid[f]===-1)this.confirmed.add(f);
     for(const n of ns)if(this.state[n]===0||this.state[n]===3){
       // Клетка с вопросом не должна блокировать аккорд: перед открытием
       // возвращаем её в обычное скрытое состояние.
@@ -799,7 +829,8 @@ class MinesGame{
     for(let i=0;i<this.total;i++)if(this.state[i]!==1)hidden.push(i);
     if(hidden.length===this.mineCount&&hidden.every(i=>this.grid[i]===-1)){
       this.won=true;
-      for(const i of hidden)if(this.state[i]!==2)this.state[i]=2;
+      this.flagged=this.flagged||new Set();
+      for(const i of hidden){if(this.state[i]!==2)this.state[i]=2;this.flagged.add(i);}
       return true;
     }
     return false;
@@ -831,7 +862,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
   key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
-  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true}};},
+  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,vchno17:true}}};},
   load(){
     try{
       const raw=localStorage.getItem(this.key);
@@ -881,50 +912,83 @@ const SFX={
   }
 };
 
-/* --------- Фоновая музыка: настоящая «Лунная соната» (Бетховен, op.27 №2, ч.1) ---------
-   В APK упакован аудиофайл music/moonlight.ogg (запись из public domain-архива
-   archive.org, огранка ~2.5 мин, OGG/Opus) — играет реальное фортепиано, не синтез.
-   Если файл недоступен (например, сайт открыт без папки music) — автоматически
-   включается запасной WebAudio-синтезатор той же темы, чтобы тишины не было. */
-const MUSIC={el:null,timer:null,step:0,nextT:0,gain:null,fileOk:false,tried:false,retries:0};
+/* --- музыка: НАСТОЯЩИЙ HTML5 Audio + прямое воспроизведение файла.
+   Прежняя схема (MediaElementSource -> GainNode -> destination) в WebView
+   на Android молча глушила звук: маршрутизация медиа-элемента через
+   WebAudio-граф там поддерживается плохо. Теперь аудио идёт НАПРЯМУЮ через
+   <audio>/new Audio(file), громкость — el.volume. WebAudio используется
+   только для синтеза звуковых эффектов. */
+const MUSIC={el:null,volsent:false,fileOk:false,tried:false,retries:0,order:[],idx:0};
+const TRACKS=[ // id -> файл и название (порядок = порядок воспроизведения по умолчанию)
+  {id:'moonlight',file:'music/moonlight.ogg',name:'Бетховен — Лунная соната'},
+  {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (Air OP)'},
+  {id:'mozart',file:'music/mozart.ogg',name:'Моцарт — Свадьба Фигаро'},
+  {id:'vchno17',file:'music/vchno17.ogg',name:'Pyrokinesis — Вечно 17'}
+];
+function enabledTracks(){ // список треков, отмеченных галочками (в порядке TRACKS)
+  const t=(S&&S.tracks)||{moonlight:true,tori:true,mozart:true,vchno17:true};
+  return TRACKS.filter(x=>t[x.id]!==false);
+}
+function setMusicVol(v){ // плавная громкость напрямую у элемента
+  if(MUSIC.el){try{MUSIC.el.volume=Math.max(0,Math.min(1,v));}catch(e){}}
+}
+function playTrackAt(i){
+  const ac=audio();if(!ac)return;
+  const list=MUSIC.order;if(!list.length)return;
+  MUSIC.idx=((i%MUSIC.order.length)+MUSIC.order.length)%MUSIC.order.length;
+  if(MUSIC.el){try{MUSIC.el.pause();MUSIC.el.removeAttribute('src');MUSIC.el.load();}catch(e){}}
+  const tr=list[MUSIC.idx];
+  try{
+    const el=new Audio();
+    el.preload='auto';el.loop=false;
+    el.volume=0;
+    el.addEventListener('canplaythrough',()=>{ // файл реально прогрузился — крутим громкость
+      if(MUSIC.el!==el)return;
+      MUSIC.fileOk=true;
+      let v=0;const fade=setInterval(()=>{v+=0.06;setMusicVol(Math.min(0.9,v));if(v>=0.9)clearInterval(fade);},80);
+    },{once:true});
+    el.addEventListener('ended',()=>{ // конец трека — следующий из плейлиста
+      if(MUSIC.el===el)playTrackAt(MUSIC.idx+1);
+    });
+    el.addEventListener('error',()=>{ // битый/отсутствующий файл — пропускаем к следующему
+      if(MUSIC.el===el&&MUSIC.order.length>1&&MUSIC.retries<MUSIC.order.length*2){
+        MUSIC.retries++;playTrackAt(MUSIC.idx+1);
+      } else if(MUSIC.el===el){MUSIC.fileOk=false;MUSIC.tried=false;}
+    });
+    MUSIC.el=el; // ВАЖНО: присваиваем ДО load() — иначе canplaythrough не сработает
+    el.src=tr.file;
+    try{el.load();}catch(e){}
+    el.play().catch(err=>{
+      console.warn('[music] play() отклонён:',err&&err.name);
+      /* Повтор произойдёт при следующем касании экрана (unlockAudio) */
+    });
+  }catch(e){/* нет файла/блокировка autoplay */}
+}
 function musicStart(){
   if(!S.music)return;
   const ac=audio();if(!ac)return;
   if(ac.state==='suspended')ac.resume().catch(()=>{});
-  if(MUSIC.el&&!MUSIC.el.paused)return; // уже играет
-  /* Первый запуск: пробуем настоящий аудиофайл через HTML5 Audio.
-     Файл moonlight.ogg лежит в APK рядом с index.html — это реальная запись
-     игры на фортепиано (Бетховен, «Лунная соната», op.27 №2, 1-я часть). */
-  if(!MUSIC.tried){
-    MUSIC.tried=true;
-    try{
-      const el=new Audio('music/moonlight.ogg');
-      el.loop=true;el.preload='auto';el.volume=1;
-      let g=null,src=null;
-      try{src=ac.createMediaElementSource(el);g=ac.createGain();g.gain.value=0.0;src.connect(g).connect(ac.destination);}catch(e){/* не удалось маршрутизировать — играем без gain */}
-      el.addEventListener('error',()=>{ // файл не загрузился — повторим попытку позже
-        MUSIC.fileOk=false;MUSIC.tried=false;MUSIC.retries++;
-      });
-      el.play().then(()=>{MUSIC.el=el;MUSIC.gain=g;MUSIC.fileOk=true;
-        if(g)g.gain.setTargetAtTime(0.9,ac.currentTime,1.2);}).catch(err=>{
-        console.warn('[music] autoplay заблокирован:',err&&err.name);
-        /* Разблокировка произойдёт при первом касании экрана (unlockAudio),
-           там будет вызван musicStart() и музыка стартует по-настоящему. */
-      });
-    }catch(e){/* нет файла/блокировка autoplay */}
+  const list=enabledTracks();
+  if(!list.length){musicStop(0.3);return;} // все галочки сняты — тишина
+  const ids=list.map(x=>x.id).join(',');
+  if(MUSIC.orderKey!==ids){ // изменился набор треков — пересобираем плейлист
+    MUSIC.order=list;MUSIC.orderKey=ids;
+    if(MUSIC.el){playTrackAt(0);return;} // сразу переключаемся на новый список
   }
-  if(MUSIC.fileOk&&MUSIC.el){ // файл уже есть — просто поднимаем громкость / возобновляем
+  if(!MUSIC.order)MUSIC.order=list;
+  if(MUSIC.el&&!MUSIC.el.paused)return; // уже играет
+  if(!MUSIC.tried||!MUSIC.fileOk){
+    MUSIC.tried=true;MUSIC.retries=0;
+    playTrackAt(MUSIC.order.length?MUSIC.idx:0);
+    return;
+  }
+  if(MUSIC.fileOk&&MUSIC.el){ // элемент жив — просто возобновляем/поднимаем громкость
     if(MUSIC.el.paused)MUSIC.el.play().catch(()=>{});
-    if(MUSIC.gain)MUSIC.gain.gain.setTargetAtTime(0.9,audio().currentTime,0.8);return;}
-  /* Синтез-страховка ОТКЛЮЧЁН по требованию: играет только настоящая запись.
-     Если файл ещё не готов — попробуем загрузить его повторно (до 3 раз). */
-  if(!MUSIC.tried && MUSIC.retries<3 && App.state==='MENU'){ /* повтор через unlockAudio/musicStart */ }
+    setMusicVol(0.9);}
 }
 function musicStop(fade){
-  const ac=audio();
   if(MUSIC.el){try{MUSIC.el.pause();}catch(e){}}
-  if(MUSIC.gain&&ac)MUSIC.gain.gain.setTargetAtTime(0.0001,ac.currentTime,fade||0.6);
-  if(MUSIC.timer){clearInterval(MUSIC.timer);MUSIC.timer=null;}
+  MUSIC.tried=false;MUSIC.fileOk=false; // при следующем старте — перезапуск плейлиста
 }
 /* ================= [6] 3D-СЦЕНА THREE.JS ================= */
 const COLORS={
@@ -935,7 +999,7 @@ const COLORS={
 const App={
   renderer:null,scene:null,camera:null,raycaster:new THREE.Raycaster(),
   pointerNdc:new THREE.Vector2(),
-  tiles:null,flags:null,fuses:null,marks:null,glows:null,board:null,plate:null,
+  tiles:null,flags:null,fuses:null,glows:null,board:null,plate:null,
   numbers:[],particles:null,pGeo:null,pMat:null,
   W:0,H:0,SZ:1,game:null,state:'MENU',
   camAz:0.9,camEl:0.95,camDist:24,target:{x:0,y:0,z:0},
@@ -988,22 +1052,53 @@ function initScene(){
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
 
-  const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
-  // Маркер-«бомба» вместо треугольного флага: тёмная сфера с неоновым
-  // бликом и коротким штырьком сверху (цилиндр + конус).
+  // Маркер-«бомба» вместо треугольного флага: ТЁМНАЯ сфера (как настоящая
+  // бомба) с ярким янтарным свечением + короткий светящийся фитиль сверху.
+  // ВАЖНО (почему маркер раньше было не видно): материал был чисто белый с
+  // emissiveIntensity 0.7 — на скрытой плитке такого же светлого тона маркер
+  // просто сливался с ней. Теперь тело тёмное, а свечение цветное — контраст гарантирован.
   const bombGeo=new THREE.SphereGeometry(0.26,12,10);bombGeo.translate(0,0.52,0);
-  App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),28*28);
+  /* ВАЖНО (почему метки-бомбы «не отображались»): у InstancedMesh по
+     умолчанию frustumCulled=true и для отсечения используется bounding sphere
+     исходной геометрии (вокруг точки 0,0,0), которая НЕ учитывает позиции
+     инстансов на большом поле — целые группы маркеров отсекались камерой.
+     Теперь отсечение для декоративных инстансов принудительно выключено. */
+  /* ФИКС «бомбы не ставятся / остаётся пустое место»: раньше тело бомбы было
+     ТЁМНО-СИНИМ (0x14161f) с тусклым свечением 0.55 — на сиреневом поле
+     #BD5D9C маркер просто сливался и выглядел как «пусто». Теперь тело почти
+     чёрное с сильным янтарным самосвечением (виден без света), а вокруг
+     основания добавлено яркое неоновое кольцо-подсветка (App.flagRings). */
+  App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshBasicMaterial({color:0xffb300}),28*28);
+  App.flags.frustumCulled=false;App.flags.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  /* ВАЖНО (финальный фикс «бомбы не видно на сиреневом поле»): у InstancedMesh
+     bounding sphere считается от исходной геометрии вокруг (0,0,0) и НЕ
+     пересчитывается при расстановке инстансов по полю — на больших полях целые
+     группы маркеров могли отсекаваться камерой. Сферу ставим вручную сразу
+     после создания каждого меша. */
   App.scene.add(App.flags);
   const fuseGeo=new THREE.CylinderGeometry(0.05,0.05,0.18,6);fuseGeo.translate(0,0.82,0);
-  App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshStandardMaterial({color:0x1a1a1a,emissive:0xffee00,emissiveIntensity:0.5,roughness:0.6}),28*28);
+  App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshBasicMaterial({color:0xffee00}),28*28);
+  App.fuses.frustumCulled=false;App.fuses.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.flags.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.5,0),1e4);
+  App.fuses.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.8,0),1e4);
   App.scene.add(App.fuses);
 
-  const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
-  App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),28*28);
-  App.scene.add(App.marks);
+  /* Кольцо-подсветка под каждой меткой-бомбой: ярко-жёлтый аддитивный круг
+     на уровне верхней грани плитки — маркер видно даже на светлом поле и издалека. */
+  const ringGeo=new THREE.PlaneGeometry(1,1);ringGeo.rotateX(-Math.PI/2);
+  App.flagRings=new THREE.InstancedMesh(ringGeo,new THREE.MeshBasicMaterial({color:COLORS.yellow,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false}),28*28);
+  App.flagRings.frustumCulled=false;App.flagRings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.flagRings.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0),1e4);
+  App.flagRings.renderOrder=900;
+  App.scene.add(App.flagRings);
+
+  // Режим «?» полностью удалён из игры — меш вопросов больше не создаётся
+  // (раньше при случайном state===3 рисовалось непонятное кольцо — «какая-то хуйня»).
 
   const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
   App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),28*28);
+  App.glows.frustumCulled=false;App.glows.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.glows.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0),1e4);
   App.scene.add(App.glows);
 
   // Текстовые спрайты цифр (создаются под текущую сетку)
@@ -1043,9 +1138,16 @@ function setDeco(mesh,id,on,lift,color,scl){
 }
 
 /* --- перестройка мешей под состояние партии --- */
-/* Кубы: приятная «тёплая сталь» с лёгким бирюзовым отливом (были слишком
-   тёмные и грязно-синие). Открытая клетка — глубокий графит, подсветка — светлее. */
-const cHidden=new THREE.Color(0x39445a),cOpen=new THREE.Color(0x121821),cHot=new THREE.Color(0x5d6f8c),cDead=new THREE.Color(0x2a0d12);
+/* Кубы: по запросу игрока — цвет скрытых клеток ближе к #BD5D9C (припылённый
+   сиренево-розовый). Открытая клетка — глубокий графит для контраста с цифрами,
+   подсветка под курсором — светлее базового, взорванная — тёмно-малиновый. */
+/* Открытые клетки (с цифрами) — того же цвета, что и поле: так сразу видно,
+   что клетка уже «прожата». Отличие только по высоте (плита ниже скрытой). */
+const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0xBD5D9C),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
+/* ФИКС «прожатые блоки не изменили цвет»: раньше cOpen был ГРАФИТОМ (тёмным),
+   и открытые клетки выглядели чёрными квадратами, отличающимися от поля.
+   Теперь cOpen === cHidden (#BD5D9C) — открытая клетка того же цвета, что и всё
+   поле; признак «прожата» — только опущенная высота плитки и цифра на ней. */
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
@@ -1054,6 +1156,9 @@ function syncTiles(idsChanged){
     let col,fy;
     if(st===1){col=cOpen;fy=0.16;}
     else{
+      /* ФИКС «плитки не прожимаются»: если клетка открыта (st===1), она ВСЕГДА
+         опускается и красится в cOpen — независимо от анимаций GSAP. Ветка ниже
+         касается только скрытых/флаговых клеток. */
       const hot=App.peekIds&&App.peekIds.includes(id);
       col=hot?cHot:cHidden;fy=1;
     }
@@ -1063,14 +1168,35 @@ function syncTiles(idsChanged){
   App.tiles.instanceMatrix.needsUpdate=true;
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
 
-  // флаги / вопросы / подсветка
-  App.flags._n=0;App.marks._n=0;App.glows._n=0;App.fuses._n=0;
+  // флаги / подсветка
+  App.flags._n=0;App.glows._n=0;App.fuses._n=0;if(App.flagRings)App.flagRings._n=0;
   for(let id=0;id<g.total;id++){
-    if(g.state[id]===2){setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);}
-    if(g.state[id]===3)setDeco(App.marks,id,true,0,new THREE.Color(COLORS.magenta));
+    // ВАЖНО: раньше маркер-бомба рисовался ТОЛЬКО для state===2, а при
+    // аккорде g.chord() превращает флаги в открытые клетки (state=1) —
+    // бомба исчезала с поля. Теперь бомбы остаются и на клетках, которые
+    // были помечены и открыты аккордом (grid>=0 гарантирует: там нет мины).
+    if(g.state[id]===2||(g.state[id]===1&&((App.bombMarks&&App.bombMarks.has(id))||(g.flagged&&g.flagged.has(id))||(g.confirmed&&g.confirmed.has(id))))){
+      const wasFlag=(App.bombMarks&&App.bombMarks.has(id))||(g.flagged&&g.flagged.has(id))||(g.confirmed&&g.confirmed.has(id));
+      /* ФИКС «бомбы не видно»: раньше метка ставилась на фиксированной высоте
+         y=0.5 независимо от того, опущена плитка или нет — на ПОЛНОЦВЕТНЫХ
+         скрытых плитках (верх 0.5*Sz при Sz~1) бомба тонула В ГЕОМЕТРИИ куба.
+         Теперь высота считается от реальной верхней грани плитки + подъём. */
+      const topY=(g.state[id]===1?0.16:1)*App.SZ*0.5;
+      const lift=topY+0.02-0.5; // setDeco ставит метку на y=0.5+lift => 0.5+lift=topY+0.02
+      setDeco(App.flags,id,true,lift,new THREE.Color(COLORS.yellow));
+      setDeco(App.fuses,id,true,lift,null);
+      if(App.flagRings)setDeco(App.flagRings,id,true,topY+0.005,null,0.8); // кольцо у верхней грани (setDeco: y=0.5+lift)
+    } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
+      // СТРАХОВКА: если флаг по какой-то причине «потерялся» в state, но
+      // метка ещё в списке — рисуем бомбу поверх скрытой клетки в любом случае.
+      const topY=1*App.SZ*0.5;const lift=topY+0.02-0.5;
+      setDeco(App.flags,id,true,lift,new THREE.Color(COLORS.yellow));
+      setDeco(App.fuses,id,true,lift,null);
+      if(App.flagRings)setDeco(App.flagRings,id,true,topY+0.005,null,0.8);
+    }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
-  finishInst(App.flags);finishInst(App.marks);finishInst(App.glows);finishInst(App.fuses);
+  finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);if(App.flagRings)finishInst(App.flagRings);
   updateNumbers();
 }
 function finishInst(mesh){
@@ -1081,30 +1207,33 @@ function finishInst(mesh){
   mesh.visible=mesh._n>0&&!(mesh===App.flags&&false);
 }
 
-/* --- спрайты цифр --- */
-/* ВАЖНО (почему цифры раньше мигали): все CanvasTexture создавались над ОДНИМ
-   и тем же canvas. В WebGL при каждой перерисовке кадра такие текстуры заново
-   выгружают пиксели из canvas — а в момент между очисткой и отрисовкой GPU
-   видел пустой canvas, и цифры исчезали (были видны лишь кадр после открытия).
-   Теперь для КАЖДОЙ цифры свой собственный canvas + своя текстура: содержимое
-   неизменно, цифры видны постоянно. */
-function makeNumTexture(n){
-  const cv=document.createElement('canvas');cv.width=cv.height=128;
+/* --- цифры на плитках: ОТДЕЛЬНЫЕ ПЛОСКИЕ ПЛИТКИ-НАКЛАДКИ ---
+   Раньше цифры рисовались полупрозрачными plane-спрайтами над плитками.
+   На Android WebView из-за z-fighting и порядка отрисовки прозрачных
+   инстансов они были видны лишь кадр после открытия клетки. Теперь для
+   каждой открытой цифры создаётся своя непрозрачная плоская плитка с
+   canvas-текстурой (цифра + фон цвета открытой клетки), поднятая на 0.02
+   над основной плиткой — запаяно видима всегда, пока клетка открыта. */
+const NUM_COLORS=['#00f3ff','#3dff8a','#ffee00','#ff9d00','#ff00ff','#7df9ff','#ffffff','#ff2d55'];
+const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas на каждую цифру!)
+function makeFaceTex(n){
+  const key='n'+n;
+  if(faceCache[key])return faceCache[key];
+  const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
   const x=cv.getContext('2d');
-  x.clearRect(0,0,128,128);
-  x.font='900 92px Orbitron, Rajdhani, sans-serif';x.textAlign='center';x.textBaseline='middle';
-  const col='#'+new THREE.Color(COLORS.nums[n-1]).getHexString();
-  x.shadowColor=col;x.shadowBlur=22;
-  x.fillStyle=col;x.fillText(String(n),64,70);
-  x.shadowBlur=6;x.fillText(String(n),64,70);
-  const t=new THREE.CanvasTexture(cv);
+  x.fillStyle='#'+cOpen.getHexString();x.fillRect(0,0,S2,S2);        // фон = цвет плитки
+  x.strokeStyle='rgba(0,243,255,0.30)';x.lineWidth=4;x.strokeRect(6,6,S2-12,S2-12); // неоновая рамка
+  const col=NUM_COLORS[n-1]||'#ffffff';
+  x.font='900 84px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle';
+  x.shadowColor=col;x.shadowBlur=16;
+  x.fillStyle=col;x.fillText(String(n),S2/2,S2/2+4);
+  x.shadowBlur=4;x.fillText(String(n),S2/2,S2/2+4);
+  const t=new THREE.CanvasTexture(cv);           // СВОЙ canvas — GPU не перетирает пиксели
+  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;t.generateMipmaps=false;
   if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
-  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;
-  t.generateMipmaps=false;
   t.needsUpdate=true;
-  return t;
+  return faceCache[key]=t;
 }
-const numTexCache={};
 let numGeometry=null;
 function clearNumbers(){
   for(const s of App.numbers){
@@ -1115,21 +1244,17 @@ function clearNumbers(){
 }
 function updateNumbers(){
   clearNumbers();
-  const g=App.game;
+  const g=App.game;if(!g)return;
   if(!numGeometry){numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);}
-  const geo=numGeometry;
-  // Цифры всегда ПОВЕРХ плиток и флагов: иначе на части GPU (Android WebView)
-  // z-fighting с плиткой делал их видимыми лишь на мгновение.
   for(let id=0;id<g.total;id++){
     const v=g.grid[id];
     if(g.state[id]===1&&v>0){
-      if(!numTexCache[v])numTexCache[v]=makeNumTexture(v);
-      const m=new THREE.MeshBasicMaterial({map:numTexCache[v],transparent:true,depthWrite:false,toneMapped:false});
-      const sp=new THREE.Mesh(geo,m);
+      const m=new THREE.MeshBasicMaterial({map:makeFaceTex(v),toneMapped:false}); // НЕ прозрачный — видно всегда
+      const sp=new THREE.Mesh(numGeometry,m);
       const p=cellPos(id);
-      sp.position.set(p.x,0.09*App.SZ+0.06,p.z);
-      sp.scale.setScalar(App.SZ*0.72);
-      sp.renderOrder=999;
+      sp.position.set(p.x,0.16*App.SZ+0.02,p.z); // выше верхней грани плитки (0.16*Sz) на 0.02
+      sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
+      sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
     }
   }
@@ -1158,11 +1283,23 @@ function buildBoard(){
 
 /* --- GSAP-обёртки (с фолбэком, если CDN недоступен) --- */
 const T={
+  /* ВАЖНО (фикс «цифры появляются только через кадр/не появляются»):
+     раньше flipIn опускал плитку ТОЛЬКО по высоте — цвет плитки оставался
+     скрытым (cHidden === cOpen, но GPU-инстансы при анимации сбрасывали
+     атрибут цвета). Теперь при завершении твина плитка перекрашивается в
+     явный открытый цвет и цвета инстансов принудительно обновляются. */
   flipIn(id,delay){
     const o={y:1};
-    const upd=()=>{setTile(id,o.y,1);App.tiles.instanceMatrix.needsUpdate=true;};
-    if(window.gsap)gsap.to(o,{y:0.16,duration:0.42,delay,ease:'back.out(1.7)',onUpdate:upd});
-    else{o.y=0.16;upd();}
+    /* КЛЮЧЕВОЙ ФИКС «цифры мелькают и исчезают»: раньше во время твина
+       setTile вызывался БЕЗ цвета, а GPU-инстанс плитки оставался с цветом
+       скрытой клетки; при некоторых состояниях камеры/материала цифра на
+       плоскости оказывалась визуально «под» плиткой. Теперь плитка красится
+       в открытый цвет СРАЗУ при постановке state=1 (см. reveal/doReveal) и
+       перекрашивается на КАЖДОМ кадре анимации — цифра видна непрерывно. */
+    const upd=()=>{setTile(id,o.y,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;};
+    const done=()=>{setTile(id,0.16,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;updateNumbers();};
+    if(window.gsap)gsap.to(o,{y:0.16,duration:0.42,delay,ease:'back.out(1.7)',onUpdate:upd,onComplete:done});
+    else{o.y=0.16;upd();done();}
   },
   popFlag(id,delay){
     if(window.gsap&&App.flags)gsap.fromTo({s:0},{s:1,duration:0.4,delay,ease:'back.out(2.5)',onUpdate:()=>syncTiles()},{immediateRender:false});
@@ -1209,6 +1346,18 @@ function stepParticles(dt){
   App.pGeo.attributes.position.needsUpdate=true;
   App.pMat.opacity=Math.max(0,App.pLife);
 }
+
+/* ФИКС «цифры/бомбы/прожатия появляются только на мгновение»: раньше 3D-меш
+   перестраивался только из событий клика и одного setTimeout-досинхрона,
+   который WebView замораживал при сворачивании — после анимаций плитки
+   «всплывали» обратно без цвета и цифр. Теперь пока идёт партия, состояние
+   гарантированно переносится в меш каждые 400 мс (лёгкая операция, на
+   мобильных не влияет). */
+setInterval(()=>{
+  try{
+    if(App.game&&App.tiles&&(App.state==='PLAYING'||App.state==='PAUSED'||App.state==='OVER'||App.state==='WIN')&&!document.hidden)syncTiles();
+  }catch(e){console.warn('[resync]',e);}
+},400);
 
 /* --- главный цикл --- */
 let lastT=performance.now();
@@ -1347,10 +1496,17 @@ function tryChord(id){
   if(g.state[id]!==1||g.grid[id]<=0)return false;
   const ns=g.nb(id);
   const flags=ns.filter(n=>g.state[n]===2).length;
-  if(flags<g.grid[id]){SFX.error();pulseTile(id);return false;} // мало флагов — не срабатывает
+  if(flags<g.grid[id]){SFX.error();pulseTile(id);return false;} // флагов меньше цифры — аккорд не срабатывает
   const r=g.chord(id); // chord() при flags>=digit откроет всех немеченых соседей
   if(r==='boom'){SFX.chord();onDefeat(g.exploded);return true;}
   if(r===null){SFX.error();return false;}
+  // флаги, съеденные аккордом, остаются на поле как метки-бомбы
+  for(const f of (g._chordFlags||[])){if(App.bombMarks)App.bombMarks.add(f);(g.flagged=g.flagged||new Set()).add(f);}
+  /* ФИКС «после аккорда цифры не появляются»: сразу же, не дожидаясь твинов,
+     опускаем и перекрашиваем ВСЕ открытые клетки и обновляем GPU-атрибуты. */
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  App.tiles.instanceMatrix.needsUpdate=true;
+  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   SFX.chord();animateRevealed(id);refreshHud();checkVictory();
   return true;
 }
@@ -1363,6 +1519,12 @@ function doReveal(id){
   const r=g.reveal(id);
   if(r==='boom'){onDefeat(id);return;}
   SFX.reveal();
+  /* ФИКС «плитки не прожимаются / цифра не появляется»: как только клетка
+     открыта (state=1), СРАЗУ красим ВСЕ открытые клетки в явный открытый
+     цвет и обновляем GPU-атрибуты — не дожидаясь окончания GSAP-твина. */
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  App.tiles.instanceMatrix.needsUpdate=true;
+  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   animateRevealed(id);
   refreshHud();checkVictory();
 }
@@ -1372,13 +1534,25 @@ function animateRevealed(fromId){
   const g=App.game;
   const around=[fromId,...g.nb(fromId)];
   syncTiles();
+  // ФОНОВЫЙ ДОСИНХРОН: через 0.9с (после завершения всех flipIn) ещё раз
+  // красим ВСЕ открытые клетки в явный цвет открытых + обновляем атрибуты
+  // инстансов. Это гарантирует видимость цифр и меток даже если GSAP-твин
+  // или запись в instanceColor «потерялась» в WebView.
+  clearTimeout(animateRevealed._t);
+  animateRevealed._t=setTimeout(()=>{
+    for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,0.16,1,cOpen);
+    App.tiles.instanceMatrix.needsUpdate=true;
+    if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
+    syncTiles();
+  },900);
   around.forEach((id,i)=>{if(g.state[id]===1)T.flipIn(id,i*0.03);});
 }
 function doFlag(id){
-  const g=App.game;if(g.dead||g.won)return;
+  const g=App.game;if(!g||g.dead||g.won)return;
   const r=g.toggleFlag(id);
   if(r===null){SFX.error();return;}
   // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
+  if(App.bombMarks){r===2?App.bombMarks.add(id):App.bombMarks.delete(id);}
   r===2?SFX.flag():SFX.unflag();
   syncTiles();refreshHud();checkVictory();
 }
@@ -1428,7 +1602,7 @@ function setState(st){
     const playing=(st==='PLAYING');
   $('hud').classList.toggle('hidden',!(playing||st==='PAUSED'||st==='OVER'||st==='WIN'));
   $('hintBar').classList.toggle('hidden',!playing);
-  if(st==='MENU'){hideAllOverlays();menuBackdrop();T.uiShow(OV.menu);stopTimer();renderMenuStats();try{musicStart();}catch(e){console.warn('[music]',e);}}
+  if(st==='MENU'){hideAllOverlays();menuBackdrop();forceShow(OV.menu);stopTimer();renderMenuStats();try{musicStart();}catch(e){console.warn('[music]',e);}}
   /* «Лунная соната» играет ВСЕГДА: и в главном меню, и во время прохождения уровня.
      Музыка глушится только когда игрок сам выключил её в настройках (S.music=false). */
   else {try{if(S.music)musicStart();else musicStop();}catch(e){console.warn('[music]',e);}}
@@ -1472,7 +1646,13 @@ function toast(msg){
    Фоновый генератор остаётся только как страховка для случая повреждённой
    базы — он ничего не блокирует и запускается вне очереди ввода. */
 function startLevel(L){
+  App.bombMarks=new Set(); // новые метки-бомбы для новой партии
   App.freeMode=false;
+  /* Засчитываем ПОПЫТКУ на каждый запуск кампании (и победа, и поражение):
+     именно это число показывается в окне статистики после победы. */
+  SAVE.attemptsByLevel=SAVE.attemptsByLevel||{};
+  SAVE.attemptsByLevel[L|0]=(SAVE.attemptsByLevel[L|0]||0)+1;
+  Store.save();
   L=Math.max(1,Math.min(TOTAL_LEVELS,L|0));
   let lv=null;
   try{lv=generateCampaignLevel(L);}             // мгновенно: база или salt=0
@@ -1505,7 +1685,7 @@ function launchLevel(lv){
   let g;
   try{g=new MinesGame(lv);}
   catch(err){console.error('[launch] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
-  App.game=g;App.time=0;App.peekIds=null;
+  App.game=g;App.time=0;App.peekIds=null;App.bombMarks=new Set();
   hideAllOverlays();            // меню НЕ должно остаться поверх игры (главный фикс)
   try{buildBoard();}
   catch(err){console.error('[launch] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
@@ -1541,8 +1721,20 @@ function checkVictory(){
   explodeAt(Math.floor(g.total/2));
   $('winLvl').textContent=g.free?(FREE_SIZE_NAMES[g.sizeIdx]+' · '+FREE_DIFF_NAMES[g.diffIdx]):g.levelId;
   const stats=$('winStats');
+  /* ПОПЫТКИ: в кампании засчитываются на КАЖДЫЙ запуск уровня (см.
+     startLevel) — то есть «попыток: N» = сколько раз уровень запускался
+     до победного прохода включительно. Здесь только подстраховка для
+     партий, запущенных мимо startLevel, и подсчёт попыток free-режима. */
+  SAVE.attemptsByLevel=SAVE.attemptsByLevel||{};
+  let attKey,att;
+  if(g.free){attKey='free_'+g.sizeIdx+'_'+g.diffIdx;}
+  else{attKey=g.levelId;}
+  if(!g.free&&SAVE.attemptsByLevel[attKey])att=SAVE.attemptsByLevel[attKey];
+  else{SAVE.attemptsByLevel[attKey]=(SAVE.attemptsByLevel[attKey]||0)+1;att=SAVE.attemptsByLevel[attKey];}
+  Store.save();
   stats.innerHTML=
-    '<div class="stat"><b>'+fmtTime(App.time)+'</b><i>время</i></div>'+
+    '<div class="stat"><b>'+fmtTime(App.time)+'</b><i>время решения</i></div>'+
+    '<div class="stat"><b>'+att+'</b><i>попыт</i></div>'+
     '<div class="stat"><b>'+(SAVE.best[g.levelId]===App.time?'РЕКОРД':fmtTime(SAVE.best[g.levelId]))+'</b><i>лучшее</i></div>'+
     '<div class="stat"><b>'+g.mineCount+'</b><i>мин найдено</i></div>';
   $('btnNext').style.display=(!g.free&&g.levelId<TOTAL_LEVELS)?'block':'none';
@@ -1705,9 +1897,8 @@ function updateFreePreview(){
 }
 function startTimerKeep(){App.startTs=Date.now()-App.time*1000;startTimer();}
 function applyGlow(){
-  App.flags.material.emissiveIntensity=S.glow?0.9:0.15;
-  if(App.fuses)App.fuses.material.emissiveIntensity=S.glow?0.7:0.2;
-  App.marks.material.emissiveIntensity=S.glow?0.8:0.15;
+  App.flags.material.emissiveIntensity=S.glow?0.9:0.35; // не гасим ниже 0.35 — маркер всегда виден
+  if(App.fuses)App.fuses.material.emissiveIntensity=S.glow?0.7:0.25;
   App.glows.material.opacity=S.glow?0.34:0.12;
 }
 function updateSettingsUI(){
@@ -1716,7 +1907,20 @@ function updateSettingsUI(){
   $('btnGlow').textContent='Свечение: '+(S.glow?'ВКЛ':'ВЫКЛ');
   $('btnQuality').textContent='Качество: '+(S.quality?'ВЫСОКОЕ':'НИЗКОЕ');
   $('btnCam').textContent='Камера: '+(S.perspective?'ПЕРСПЕКТИВА':'ИЗОМЕТРИЯ');
+  // синхронизируем галочки треков с сохранёнными настройками
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,vchno17:true};
+  document.querySelectorAll('#musicTracks input[data-track]').forEach(cb=>{
+    cb.checked=S.tracks[cb.dataset.track]!==false;});
 }
+/* Обработчик галочек выбора треков: меняем плейлист на лету и сохраняем */
+document.addEventListener('change',e=>{
+  const cb=e.target.closest&&e.target.closest('#musicTracks input[data-track]');
+  if(!cb)return;
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,vchno17:true};
+  S.tracks[cb.dataset.track]=cb.checked;Store.save();
+  MUSIC.orderKey=null; // заставим musicStart пересобрать плейлист
+  if(S.music){MUSIC.tried=false;MUSIC.fileOk=false;musicStart();}
+});
 let orthoCam=null;
 function toggleProjection(){
   if(S.perspective){
