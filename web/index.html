@@ -1123,7 +1123,13 @@ function syncTiles(idsChanged){
     // бомба исчезала с поля. Теперь бомбы остаются и на клетках, которые
     // были помечены и открыты аккордом (grid>=0 гарантирует: там нет мины).
     if(g.state[id]===2||(g.state[id]===1&&(App.bombMarks.has(id)||(g.confirmed&&g.confirmed.has(id))))){
-      setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);
+      // ВАЖНО (фикс невидимых бомб): раньше метка ставилась на y=0.5 — при
+      // аккорде клетка ОСВОБОЖДАЕТСЯ (плита опускается до 0.16), и маркер
+      // оказывался ВНУТРИ/ПОД плиткой — его не было видно. Теперь для
+      // открытых клеток метка поднимается над их верхней гранью.
+      const lift=(g.state[id]===1)?(0.16*App.SZ-0.5)+0.03:0;
+      setDeco(App.flags,id,true,lift,new THREE.Color(COLORS.yellow));
+      setDeco(App.fuses,id,true,lift,null);
     }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
