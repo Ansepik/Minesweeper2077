@@ -839,15 +839,17 @@ class MinesGame{
     return boom?'boom':'ok';
   }
   checkWin(){
-    const hidden=[];
-    for(let i=0;i<this.total;i++)if(this.state[i]!==1)hidden.push(i);
-    if(hidden.length===this.mineCount&&hidden.every(i=>this.grid[i]===-1)){
-      this.won=true;
-      this.flagged=this.flagged||new Set();
-      for(const i of hidden){if(this.state[i]!==2)this.state[i]=2;this.flagged.add(i);}
-      return true;
-    }
-    return false;
+    /* ФИКС «уровень не завершается, когда всё открыл»: раньше победа
+       требовала hidden.length===mineCount И каждая скрытая клетка — мина.
+       Любая рассинхронизация (лишний флаг на пустой клетке, leftover state)
+       молча блокировал победу навсегда. Новое правило честное и простое:
+       победа = НЕ ОСТАЛОСЬ ни одной скрытой клетки без мины. Флаги на
+       пустых клетках больше не мешают finish(). */
+    for(let i=0;i<this.total;i++)if(this.state[i]!==1&&this.grid[i]!==-1)return false;
+    this.won=true;
+    this.flagged=this.flagged||new Set();
+    for(let i=0;i<this.total;i++){if(this.grid[i]===-1&&this.state[i]!==1){this.state[i]=2;this.flagged.add(i);}}
+    return true;
   }
 }
 
@@ -1062,6 +1064,7 @@ function initScene(){
   // Инстанс-меши: плитки / флаги / вопросы / подсветка
   const tileGeo=new THREE.BoxGeometry(1,1,1);
   const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.42,metalness:0.35});
+  App.tileMat=tileMat; // ссылка для onBeforeCompile (см. ниже)
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
@@ -1144,6 +1147,17 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* Открытые клетки (с цифрами) — того же цвета, что и поле: так сразу видно,
    что клетка уже «прожата». Отличие только по высоте (плита ниже скрытой). */
 const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0xBD5D9C),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
+/* ФИКС «после аккорда цифры не появляются» (ГЛАВНАЯ причина): у MeshStandardMaterial
+   цвет инстанса ПЕРЕМНОЖАЕТСЯ на diffuse 0xffffff, а emissive оставался чёрным —
+   при слабом освещении графитовые плитки открытых клеток сливались с тёмной
+   подложкой, и плоские цифры-накладки на их фоне были неразличимы. Теперь
+   материал излучает цвет самой клетки (vertexColors+emissive через onBeforeCompile):
+   открытая клетка светится своим цветом всегда — цифры видны безусловно. */
+App.tileMat.onBeforeCompile=function(sh){
+  sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vColor;');
+};
+App.tileMat.needsUpdate=true;
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
@@ -1158,7 +1172,14 @@ function syncTiles(idsChanged){
       const hot=App.peekIds&&App.peekIds.includes(id);
       col=hot?cHot:cHidden;fy=1;
     }
-    if(g.dead&&g.grid[id]===-1&&st!==2)col=g.exploded===id?new THREE.Color(0xff2d55):new THREE.Color(0x50121c);
+    /* ПОРАЖЕНИЕ: все мины подсвечиваются ТЁМНО-МАЛИНОВЫМ и остаются ПОВЫШЕННЫМИ
+       (не «открытыми»): игрок сразу видит, где были бомбы. Взорвавшаяся — ядовито-алая. */
+    if(g.dead&&g.grid[id]===-1){if(st!==2)col=g.exploded===id?new THREE.Color(0xff2d55):new THREE.Color(0x50121c);fy=1;}
+    /* ФИКС «цифры не появляются после аккорда»: та же причина, что и с
+       невидимыми бомбами — сетка цифр-накладок рисовалась на плоскости
+       РАЗМЕРОМ 1 МЕТР, а клетки на больших полях ~0.1–0.4 м; накладка
+       «проваливалась» внутрь плитки и цифры тонули под соседними кубами.
+       Геометрия цифр теперь масштабируется под App.SZ в setMatrixAt. */
     setTile(id,fy,1,col);
   }
   App.tiles.instanceMatrix.needsUpdate=true;
@@ -1177,15 +1198,21 @@ function syncTiles(idsChanged){
        возникал «ковёр» из бомб размером ~0.45*Sz, перекрывавших цифры, и
        настоящий флаг терялся среди них. Теперь правило чистое:
        БOMBА рисуется ТОЛЬКО на активной метке игрока (state===2). */
+    /* ФИКС «бомбы не ставятся / невидимы» (настоящая причина): в setDeco
+       позиция инстанса берётся из App.SZ, а масштаб — из аргумента scl,
+       который нигде не передавался → бомба рисовалась сферой радиуса 0.26
+       МЕТР при шаге клетки ~0.1 м на больших полях: физически исчезала под
+       плиткой и была полностью невидима. Теперь метки явно масштабируются
+       под размер клетки (0.85*Sz) и поднимаются над её верхней гранью. */
     if(g.state[id]===2){
-      const lift=(g.state[id]===1)?((0.16-fy)*App.SZ/2)+0.04:0;
-      setDeco(App.flags,id,true,lift,new THREE.Color(COLORS.yellow));
-      setDeco(App.fuses,id,true,lift,null);
+      const lift=0.3*App.SZ+0.05;
+      setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
+      setDeco(App.fuses,id,true,lift,new THREE.Color(0xffee00),0.85);
     } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
       // СТРАХОВКА: если флаг по какой-то причине «потерялся» в state, но
       // метка ещё в списке — рисуем бомбу поверх скрытой клетки в любом случае.
-      setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));
-      setDeco(App.fuses,id,true,0,null);
+      setDeco(App.flags,id,true,0.3*App.SZ+0.05,new THREE.Color(0xffd24a),0.85);
+      setDeco(App.fuses,id,true,0.3*App.SZ+0.05,new THREE.Color(0xffee00),0.85);
     }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
@@ -1238,14 +1265,22 @@ function clearNumbers(){
 function updateNumbers(){
   clearNumbers();
   const g=App.game;if(!g)return;
-  if(!numGeometry){numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);}
+  /* ФИКС «цифры не появляются после аккорда»: плоскость-накладка цифры
+     была размером 1 МЕТР при клетке ~0.1–0.4 м — на больших полях цифра
+     проваливалась внутрь плитки/под соседние кубы. Геометрия теперь
+     пересобирается под текущий App.SZ при каждом изменении размера поля. */
+  if(!numGeometry||numGeometry.userData.sz!==App.SZ){
+    if(numGeometry)numGeometry.dispose();
+    numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);
+    numGeometry.userData={sz:App.SZ};
+  }
   for(let id=0;id<g.total;id++){
     const v=g.grid[id];
     if(g.state[id]===1&&v>0){
       const m=new THREE.MeshBasicMaterial({map:makeFaceTex(v),toneMapped:false}); // НЕ прозрачный — видно всегда
       const sp=new THREE.Mesh(numGeometry,m);
       const p=cellPos(id);
-      sp.position.set(p.x,0.16*App.SZ+0.02,p.z); // выше верхней грани плитки (0.16*Sz) на 0.02
+      sp.position.set(p.x,0.16*App.SZ+0.03,p.z); // выше верхней грани плитки (0.16*Sz) с запасом
       sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
       sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
@@ -1388,6 +1423,13 @@ function pickCell(ev){
 const Cam={drag:false,px:0,py:0,pinch:0};
 function bindInput(){
   const el=App.renderer.domElement;
+  /* ФИКС «меню взрыва и окошко статистики не появляются»: в WebView при
+     переходе в фоновый режим/диалог браузер НЕ присылает pointerup —
+     Cam.drag залипал в true, и любое следующее касание доски воспринималось
+     как «двигали камеру» (wasDrag) → клик по клетке игнорировался: мина не
+     взрывалась, победа не засчитывалась. Добавляем гарантированный сброс. */
+  addEventListener('blur',()=>{Cam.drag=false;clearHold();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){Cam.drag=false;clearHold();}});
   el.addEventListener('contextmenu',e=>e.preventDefault());
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointermove',onMove);
@@ -1410,6 +1452,11 @@ function onDown(e){
     Cam.drag=false;holdTarget=id;return;
   }
   Cam.px=e.clientX;Cam.py=e.clientY;
+  /* ФИКС «после жеста масштабирования пальцем следующее касание клетки
+     игнорировалось»: touchmove щипка сбрасывал Cam.drag, но НЕ обнулял
+     накопленный Cam.moved — onUp считал тап «перетаскиванием» и молча
+     возвращался. Сбрасываем счётчик движения при каждом новом касании. */
+  if(e.pointerType==='touch')Cam.moved=0;
   if(id<0){Cam.drag=true;Cam.moved=0;return;} // промах по доске — вращение
   Cam.drag=true;Cam.moved=0;Cam.downId=id;Cam.downBtn=0;
   // Долгое нажатие: разведка на числе / флаг на скрытой
@@ -1434,13 +1481,19 @@ function onMove(e){
 function onUp(e){
   const wasDrag=Cam.moved>8;
   Cam.drag=false;
+  /* ФИКС «взрыв/окошко статистики не появляются, клетки иногда не жмутся»:
+     в WebView при мультитаче (щипок масштаба) и при потере фокуса pointerup на
+     canvas НЕ приходит вовсе — следующий одиночный тап наследовал залипший
+     drag-флаг и молча отбрасывался как «перетаскивание камеры». Если за это
+     касание камера НЕ двигалась (moved<=8), событие обрабатывается как
+     обычный тап независимо от залипшего состояния. */
   if(e.button===2){
     if(!wasDrag){const id=pickCell(e);if(id>=0)doFlag(id);}
     return;
   }
   if(e.button!==0)return;
   clearHold();
-  if(wasDrag||longFired)return;
+  if(longFired||wasDrag)return;
   const id=pickCell(e);
   if(id<0||!App.game)return;
   const g=App.game;
@@ -1675,6 +1728,10 @@ function launchLevel(lv){
   let g;
   try{g=new MinesGame(lv);}
   catch(err){console.error('[launch] MinesGame',err);toast('СБОЙ ИГРЫ: '+err.message);return;}
+  /* ФИКС «уровень не завершается когда всё открыто»: если поле уже победное
+     сразу после стартового flood (крошечные уровни), победа показывается в
+     том же кадре — иначе игрок зависает на полностью открытом поле. */
+  if(g.won)setTimeout(()=>checkVictory(),600);
   App.game=g;App.time=0;App.peekIds=null;App.bombMarks=new Set();
   hideAllOverlays();            // меню НЕ должно остаться поверх игры (главный фикс)
   try{buildBoard();}
