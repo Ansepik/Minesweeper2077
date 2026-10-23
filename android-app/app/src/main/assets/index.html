@@ -970,7 +970,7 @@ const COLORS={
 const App={
   renderer:null,scene:null,camera:null,raycaster:new THREE.Raycaster(),
   pointerNdc:new THREE.Vector2(),
-  tiles:null,flags:null,fuses:null,marks:null,glows:null,board:null,plate:null,
+  tiles:null,flags:null,fuses:null,glows:null,board:null,plate:null,
   numbers:[],particles:null,pGeo:null,pMat:null,
   W:0,H:0,SZ:1,game:null,state:'MENU',
   camAz:0.9,camEl:0.95,camDist:24,target:{x:0,y:0,z:0},
@@ -1023,19 +1023,20 @@ function initScene(){
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
 
-  const tri=new THREE.Shape();tri.moveTo(-0.32,-0.3);tri.lineTo(-0.32,0.34);tri.lineTo(0.3,0.02);
-  // Маркер-«бомба» вместо треугольного флага: тёмная сфера с неоновым
-  // бликом и коротким штырьком сверху (цилиндр + конус).
+  // Маркер-«бомба» вместо треугольного флага: ТЁМНАЯ сфера (как настоящая
+  // бомба) с ярким янтарным свечением + короткий светящийся фитиль сверху.
+  // ВАЖНО (почему маркер раньше было не видно): материал был чисто белый с
+  // emissiveIntensity 0.7 — на скрытой плитке такого же светлого тона маркер
+  // просто сливался с ней. Теперь тело тёмное, а свечение цветное — контраст гарантирован.
   const bombGeo=new THREE.SphereGeometry(0.26,12,10);bombGeo.translate(0,0.52,0);
-  App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.7,roughness:0.4}),28*28);
+  App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshStandardMaterial({color:0x14161f,emissive:0xffb300,emissiveIntensity:0.55,roughness:0.35,metalness:0.2}),28*28);
   App.scene.add(App.flags);
   const fuseGeo=new THREE.CylinderGeometry(0.05,0.05,0.18,6);fuseGeo.translate(0,0.82,0);
-  App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshStandardMaterial({color:0x1a1a1a,emissive:0xffee00,emissiveIntensity:0.5,roughness:0.6}),28*28);
+  App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshStandardMaterial({color:0x1a1a1a,emissive:0xffee00,emissiveIntensity:0.9,roughness:0.6}),28*28);
   App.scene.add(App.fuses);
 
-  const markGeo=new THREE.TorusGeometry(0.16,0.05,8,3);markGeo.rotateX(-Math.PI/2);markGeo.translate(0,0.62,0);
-  App.marks=new THREE.InstancedMesh(markGeo,new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}),28*28);
-  App.scene.add(App.marks);
+  // Режим «?» полностью удалён из игры — меш вопросов больше не создаётся
+  // (раньше при случайном state===3 рисовалось непонятное кольцо — «какая-то хуйня»).
 
   const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
   App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),28*28);
@@ -1078,9 +1079,10 @@ function setDeco(mesh,id,on,lift,color,scl){
 }
 
 /* --- перестройка мешей под состояние партии --- */
-/* Кубы: приятная «тёплая сталь» с лёгким бирюзовым отливом (были слишком
-   тёмные и грязно-синие). Открытая клетка — глубокий графит, подсветка — светлее. */
-const cHidden=new THREE.Color(0x39445a),cOpen=new THREE.Color(0x121821),cHot=new THREE.Color(0x5d6f8c),cDead=new THREE.Color(0x2a0d12);
+/* Кубы: по запросу игрока — цвет скрытых клеток ближе к #BD5D9C (припылённый
+   сиренево-розовый). Открытая клетка — глубокий графит для контраста с цифрами,
+   подсветка под курсором — светлее базового, взорванная — тёмно-малиновый. */
+const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0x121821),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
@@ -1098,14 +1100,13 @@ function syncTiles(idsChanged){
   App.tiles.instanceMatrix.needsUpdate=true;
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
 
-  // флаги / вопросы / подсветка
-  App.flags._n=0;App.marks._n=0;App.glows._n=0;App.fuses._n=0;
+  // флаги / подсветка
+  App.flags._n=0;App.glows._n=0;App.fuses._n=0;
   for(let id=0;id<g.total;id++){
     if(g.state[id]===2){setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);}
-    if(g.state[id]===3)setDeco(App.marks,id,true,0,new THREE.Color(COLORS.magenta));
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
-  finishInst(App.flags);finishInst(App.marks);finishInst(App.glows);finishInst(App.fuses);
+  finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);
   updateNumbers();
 }
 function finishInst(mesh){
@@ -1116,30 +1117,33 @@ function finishInst(mesh){
   mesh.visible=mesh._n>0&&!(mesh===App.flags&&false);
 }
 
-/* --- спрайты цифр --- */
-/* ВАЖНО (почему цифры раньше мигали): все CanvasTexture создавались над ОДНИМ
-   и тем же canvas. В WebGL при каждой перерисовке кадра такие текстуры заново
-   выгружают пиксели из canvas — а в момент между очисткой и отрисовкой GPU
-   видел пустой canvas, и цифры исчезали (были видны лишь кадр после открытия).
-   Теперь для КАЖДОЙ цифры свой собственный canvas + своя текстура: содержимое
-   неизменно, цифры видны постоянно. */
-function makeNumTexture(n){
-  const cv=document.createElement('canvas');cv.width=cv.height=128;
+/* --- цифры на плитках: ОТДЕЛЬНЫЕ ПЛОСКИЕ ПЛИТКИ-НАКЛАДКИ ---
+   Раньше цифры рисовались полупрозрачными plane-спрайтами над плитками.
+   На Android WebView из-за z-fighting и порядка отрисовки прозрачных
+   инстансов они были видны лишь кадр после открытия клетки. Теперь для
+   каждой открытой цифры создаётся своя непрозрачная плоская плитка с
+   canvas-текстурой (цифра + фон цвета открытой клетки), поднятая на 0.02
+   над основной плиткой — запаяно видима всегда, пока клетка открыта. */
+const NUM_COLORS=['#00f3ff','#3dff8a','#ffee00','#ff9d00','#ff00ff','#7df9ff','#ffffff','#ff2d55'];
+const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas на каждую цифру!)
+function makeFaceTex(n){
+  const key='n'+n;
+  if(faceCache[key])return faceCache[key];
+  const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
   const x=cv.getContext('2d');
-  x.clearRect(0,0,128,128);
-  x.font='900 92px Orbitron, Rajdhani, sans-serif';x.textAlign='center';x.textBaseline='middle';
-  const col='#'+new THREE.Color(COLORS.nums[n-1]).getHexString();
-  x.shadowColor=col;x.shadowBlur=22;
-  x.fillStyle=col;x.fillText(String(n),64,70);
-  x.shadowBlur=6;x.fillText(String(n),64,70);
-  const t=new THREE.CanvasTexture(cv);
+  x.fillStyle='#'+cOpen.getHexString();x.fillRect(0,0,S2,S2);        // фон = цвет плитки
+  x.strokeStyle='rgba(0,243,255,0.30)';x.lineWidth=4;x.strokeRect(6,6,S2-12,S2-12); // неоновая рамка
+  const col=NUM_COLORS[n-1]||'#ffffff';
+  x.font='900 84px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle';
+  x.shadowColor=col;x.shadowBlur=16;
+  x.fillStyle=col;x.fillText(String(n),S2/2,S2/2+4);
+  x.shadowBlur=4;x.fillText(String(n),S2/2,S2/2+4);
+  const t=new THREE.CanvasTexture(cv);           // СВОЙ canvas — GPU не перетирает пиксели
+  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;t.generateMipmaps=false;
   if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
-  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;
-  t.generateMipmaps=false;
   t.needsUpdate=true;
-  return t;
+  return faceCache[key]=t;
 }
-const numTexCache={};
 let numGeometry=null;
 function clearNumbers(){
   for(const s of App.numbers){
@@ -1150,21 +1154,17 @@ function clearNumbers(){
 }
 function updateNumbers(){
   clearNumbers();
-  const g=App.game;
+  const g=App.game;if(!g)return;
   if(!numGeometry){numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);}
-  const geo=numGeometry;
-  // Цифры всегда ПОВЕРХ плиток и флагов: иначе на части GPU (Android WebView)
-  // z-fighting с плиткой делал их видимыми лишь на мгновение.
   for(let id=0;id<g.total;id++){
     const v=g.grid[id];
     if(g.state[id]===1&&v>0){
-      if(!numTexCache[v])numTexCache[v]=makeNumTexture(v);
-      const m=new THREE.MeshBasicMaterial({map:numTexCache[v],transparent:true,depthWrite:false,toneMapped:false});
-      const sp=new THREE.Mesh(geo,m);
+      const m=new THREE.MeshBasicMaterial({map:makeFaceTex(v),toneMapped:false}); // НЕ прозрачный — видно всегда
+      const sp=new THREE.Mesh(numGeometry,m);
       const p=cellPos(id);
-      sp.position.set(p.x,0.09*App.SZ+0.06,p.z);
-      sp.scale.setScalar(App.SZ*0.72);
-      sp.renderOrder=999;
+      sp.position.set(p.x,0.16*App.SZ+0.02,p.z); // выше верхней грани плитки (0.16*Sz) на 0.02
+      sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
+      sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
     }
   }
@@ -1740,9 +1740,8 @@ function updateFreePreview(){
 }
 function startTimerKeep(){App.startTs=Date.now()-App.time*1000;startTimer();}
 function applyGlow(){
-  App.flags.material.emissiveIntensity=S.glow?0.9:0.15;
-  if(App.fuses)App.fuses.material.emissiveIntensity=S.glow?0.7:0.2;
-  App.marks.material.emissiveIntensity=S.glow?0.8:0.15;
+  App.flags.material.emissiveIntensity=S.glow?0.9:0.35; // не гасим ниже 0.35 — маркер всегда виден
+  if(App.fuses)App.fuses.material.emissiveIntensity=S.glow?0.7:0.25;
   App.glows.material.opacity=S.glow?0.34:0.12;
 }
 function updateSettingsUI(){
