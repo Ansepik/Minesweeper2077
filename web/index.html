@@ -784,17 +784,23 @@ class MinesGame{
     // Двойное нажатие больше НЕ переключает в «вопрос» (?) — по просьбе
     // игрока этот режим убран: цикл теперь просто флаг <-> скрыто.
     this.state[id]=(this.state[id]===2)?0:2;
+    if(this.state[id]===0&&App.bombMarks)this.bombMarks.delete(id); // снял флаг — бомба-метка уходит
     return this.state[id];
   }
   chord(id){
     if(this.dead||this.won||this.state[id]!==1||this.grid[id]<=0)return null;
     const ns=this.nb(id);
-    const flags=ns.filter(n=>this.state[n]===2).length;
-    // Ровно нужное число флагов или больше — аккорд срабатывает и открывает
-    // всех немеченых соседей (при лишних флагах игрок наказывается взрывом,
-    // если под одним из «правильных» флагов мины нет). Меньше нужного — блок.
-    if(flags<this.grid[id])return null;
+    const flagIds=ns.filter(n=>this.state[n]===2);
+    const flags=flagIds.length;
+    // ПРАВИЛА АККОРДА (по ТЗ игрока): флагов РОВНО столько, сколько требует
+    // цифра -> открываются все соседи без флагов; меньше ИЛИ больше нужного
+    // -> аккорд НЕ срабатывает, ничего не открывается.
+    if(flags!==this.grid[id])return null;
     let boom=false;
+    // запоминаем, какие клетки были ФЛАГАМИ до аккорда — чтобы метки-бомбы
+    // остались на них после открытия (иначе «поставил флаг, открыл аккордом —
+    // флага не видно»)
+    this._chordFlags=flagIds;
     for(const n of ns)if(this.state[n]===0||this.state[n]===3){
       // Клетка с вопросом не должна блокировать аккорд: перед открытием
       // возвращаем её в обычное скрытое состояние.
@@ -1107,7 +1113,13 @@ function syncTiles(idsChanged){
   // флаги / подсветка
   App.flags._n=0;App.glows._n=0;App.fuses._n=0;
   for(let id=0;id<g.total;id++){
-    if(g.state[id]===2){setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);}
+    // ВАЖНО: раньше маркер-бомба рисовался ТОЛЬКО для state===2, а при
+    // аккорде g.chord() превращает флаги в открытые клетки (state=1) —
+    // бомба исчезала с поля. Теперь бомбы остаются и на клетках, которые
+    // были помечены и открыты аккордом (grid>=0 гарантирует: там нет мины).
+    if(g.state[id]===2||(g.state[id]===1&&g.grid[id]>=0&&App.bombMarks.has(id))){
+      setDeco(App.flags,id,true,0,new THREE.Color(COLORS.yellow));setDeco(App.fuses,id,true,0,null);
+    }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
   }
   finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);
@@ -1386,10 +1398,12 @@ function tryChord(id){
   if(g.state[id]!==1||g.grid[id]<=0)return false;
   const ns=g.nb(id);
   const flags=ns.filter(n=>g.state[n]===2).length;
-  if(flags<g.grid[id]){SFX.error();pulseTile(id);return false;} // мало флагов — не срабатывает
+  if(flags!==g.grid[id]){SFX.error();pulseTile(id);return false;} // флагов != цифра — аккорд не срабатывает
   const r=g.chord(id); // chord() при flags>=digit откроет всех немеченых соседей
   if(r==='boom'){SFX.chord();onDefeat(g.exploded);return true;}
   if(r===null){SFX.error();return false;}
+  // флаги, съеденные аккордом, остаются на поле как метки-бомбы
+  for(const f of (g._chordFlags||[]))App.bombMarks.add(f);
   SFX.chord();animateRevealed(id);refreshHud();checkVictory();
   return true;
 }
@@ -1418,6 +1432,7 @@ function doFlag(id){
   const r=g.toggleFlag(id);
   if(r===null){SFX.error();return;}
   // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
+  if(r===2)App.bombMarks.add(id);
   r===2?SFX.flag():SFX.unflag();
   syncTiles();refreshHud();checkVictory();
 }
@@ -1511,6 +1526,7 @@ function toast(msg){
    Фоновый генератор остаётся только как страховка для случая повреждённой
    базы — он ничего не блокирует и запускается вне очереди ввода. */
 function startLevel(L){
+  App.bombMarks=new Set(); // новые метки-бомбы для новой партии
   App.freeMode=false;
   L=Math.max(1,Math.min(TOTAL_LEVELS,L|0));
   let lv=null;
@@ -1580,8 +1596,13 @@ function checkVictory(){
   explodeAt(Math.floor(g.total/2));
   $('winLvl').textContent=g.free?(FREE_SIZE_NAMES[g.sizeIdx]+' · '+FREE_DIFF_NAMES[g.diffIdx]):g.levelId;
   const stats=$('winStats');
+  // Статистика уровня: время решения, число попыток (проходов), рекорд, мины
+  SAVE.attemptsByLevel=SAVE.attemptsByLevel||{};
+  SAVE.attemptsByLevel[g.levelId]=(SAVE.attemptsByLevel[g.levelId]||0)+1;
+  Store.save();
   stats.innerHTML=
     '<div class="stat"><b>'+fmtTime(App.time)+'</b><i>время</i></div>'+
+    '<div class="stat"><b>'+SAVE.attemptsByLevel[g.levelId]+'</b><i>попыток</i></div>'+
     '<div class="stat"><b>'+(SAVE.best[g.levelId]===App.time?'РЕКОРД':fmtTime(SAVE.best[g.levelId]))+'</b><i>лучшее</i></div>'+
     '<div class="stat"><b>'+g.mineCount+'</b><i>мин найдено</i></div>';
   $('btnNext').style.display=(!g.free&&g.levelId<TOTAL_LEVELS)?'block':'none';
