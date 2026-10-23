@@ -781,10 +781,16 @@ class MinesGame{
   }
   toggleFlag(id){
     if(this.dead||this.won||this.state[id]===1)return null;
-    // Двойное нажатие больше НЕ переключает в «вопрос» (?) — по просьбе
-    // игрока этот режим убран: цикл теперь просто флаг <-> скрыто.
+    // Цикл флага: скрыто -> флаг -> скрыто (режим «?» удалён по просьбе игрока).
     this.state[id]=(this.state[id]===2)?0:2;
-    if(this.state[id]===0&&App.bombMarks)this.bombMarks.delete(id); // снял флаг — бомба-метка уходит
+    /* ФИКС «флаг не ставится / остаётся пустое место»: раньше здесь был
+       виджет-обращение App.bombMarks, а App ещё мог быть не инициализирован
+       (первый тап до загрузки сцены) — обращение к App.bombMarks бросало
+       ReferenceError/TypeError и флаг НЕ ставился вообще. Теперь состояние
+       партии хранит метки сама (флаг = множество flagged), без зависимости
+       от глобального App. */
+    this.flagged=this.flagged||new Set();
+    if(this.state[id]===2)this.flagged.add(id);else this.flagged.delete(id);
     return this.state[id];
   }
   chord(id){
@@ -823,7 +829,8 @@ class MinesGame{
     for(let i=0;i<this.total;i++)if(this.state[i]!==1)hidden.push(i);
     if(hidden.length===this.mineCount&&hidden.every(i=>this.grid[i]===-1)){
       this.won=true;
-      for(const i of hidden)if(this.state[i]!==2)this.state[i]=2;
+      this.flagged=this.flagged||new Set();
+      for(const i of hidden){if(this.state[i]!==2)this.state[i]=2;this.flagged.add(i);}
       return true;
     }
     return false;
@@ -1058,10 +1065,17 @@ function initScene(){
      Теперь отсечение для декоративных инстансов принудительно выключено. */
   App.flags=new THREE.InstancedMesh(bombGeo,new THREE.MeshStandardMaterial({color:0x14161f,emissive:0xffb300,emissiveIntensity:0.55,roughness:0.35,metalness:0.2}),28*28);
   App.flags.frustumCulled=false;App.flags.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  /* ВАЖНО (финальный фикс «бомбы не видно на сиреневом поле»): у InstancedMesh
+     bounding sphere считается от исходной геометрии вокруг (0,0,0) и НЕ
+     пересчитывается при расстановке инстансов по полю — на больших полях целые
+     группы маркеров могли отсекаваться камерой. Сферу ставим вручную сразу
+     после создания каждого меша. */
   App.scene.add(App.flags);
   const fuseGeo=new THREE.CylinderGeometry(0.05,0.05,0.18,6);fuseGeo.translate(0,0.82,0);
   App.fuses=new THREE.InstancedMesh(fuseGeo,new THREE.MeshStandardMaterial({color:0x1a1a1a,emissive:0xffee00,emissiveIntensity:0.9,roughness:0.6}),28*28);
   App.fuses.frustumCulled=false;App.fuses.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.flags.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.5,0),1e4);
+  App.fuses.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.8,0),1e4);
   App.scene.add(App.fuses);
 
   // Режим «?» полностью удалён из игры — меш вопросов больше не создаётся
@@ -1070,6 +1084,7 @@ function initScene(){
   const glowGeo=new THREE.PlaneGeometry(1,1);glowGeo.rotateX(-Math.PI/2);
   App.glows=new THREE.InstancedMesh(glowGeo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false}),28*28);
   App.glows.frustumCulled=false;App.glows.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.glows.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0),1e4);
   App.scene.add(App.glows);
 
   // Текстовые спрайты цифр (создаются под текущую сетку)
@@ -1123,6 +1138,9 @@ function syncTiles(idsChanged){
     let col,fy;
     if(st===1){col=cOpen;fy=0.16;}
     else{
+      /* ФИКС «плитки не прожимаются»: если клетка открыта (st===1), она ВСЕГДА
+         опускается и красится в cOpen — независимо от анимаций GSAP. Ветка ниже
+         касается только скрытых/флаговых клеток. */
       const hot=App.peekIds&&App.peekIds.includes(id);
       col=hot?cHot:cHidden;fy=1;
     }
@@ -1139,12 +1157,19 @@ function syncTiles(idsChanged){
     // аккорде g.chord() превращает флаги в открытые клетки (state=1) —
     // бомба исчезала с поля. Теперь бомбы остаются и на клетках, которые
     // были помечены и открыты аккордом (grid>=0 гарантирует: там нет мины).
-    if(g.state[id]===2||(g.state[id]===1&&((App.bombMarks&&App.bombMarks.has(id))||(g.confirmed&&g.confirmed.has(id))))){
+    if(g.state[id]===2||(g.state[id]===1&&((App.bombMarks&&App.bombMarks.has(id))||(g.flagged&&g.flagged.has(id))||(g.confirmed&&g.confirmed.has(id))))){
       // ВАЖНО (фикс невидимых бомб): раньше метка ставилась на y=0.5 — при
       // аккорде клетка ОСВОБОЖДАЕТСЯ (плита опускается до 0.16), и маркер
       // оказывался ВНУТРИ/ПОД плиткой — его не было видно. Теперь для
       // открытых клеток метка поднимается над их верхней гранью.
-      const lift=(g.state[id]===1)?(0.16*App.SZ-0.5)+0.03:0;
+      /* ФИКС «поставил флаг -> открыл аккордом -> цифры нет»: раньше для клетки,
+         которая была флагом и открыта аккордом, плитка НЕ опускалась в 3D
+         (оставалась на высоте скрытой), хотя state=1 — визуально клетка
+         выглядела непрожатой без цифры. Теперь: если клетка открыта (state=1),
+         она ВСЕГДА опущена; метка-бомба поднимается над её верхней гранью. */
+      const wasFlag=(App.bombMarks&&App.bombMarks.has(id))||(g.flagged&&g.flagged.has(id))||(g.confirmed&&g.confirmed.has(id));
+      // верхняя грань текущей плитки = fy*Sz/2 (box центрирован в 0); метка ставится от неё +0.04
+      const lift=(g.state[id]===1)?((0.16-fy)*App.SZ/2)+0.04:0;
       setDeco(App.flags,id,true,lift,new THREE.Color(COLORS.yellow));
       setDeco(App.fuses,id,true,lift,null);
     } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
@@ -1448,7 +1473,12 @@ function tryChord(id){
   if(r==='boom'){SFX.chord();onDefeat(g.exploded);return true;}
   if(r===null){SFX.error();return false;}
   // флаги, съеденные аккордом, остаются на поле как метки-бомбы
-  for(const f of (g._chordFlags||[]))App.bombMarks.add(f);
+  for(const f of (g._chordFlags||[])){if(App.bombMarks)App.bombMarks.add(f);(g.flagged=g.flagged||new Set()).add(f);}
+  /* ФИКС «после аккорда цифры не появляются»: сразу же, не дожидаясь твинов,
+     опускаем и перекрашиваем ВСЕ открытые клетки и обновляем GPU-атрибуты. */
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  App.tiles.instanceMatrix.needsUpdate=true;
+  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   SFX.chord();animateRevealed(id);refreshHud();checkVictory();
   return true;
 }
@@ -1490,11 +1520,11 @@ function animateRevealed(fromId){
   around.forEach((id,i)=>{if(g.state[id]===1)T.flipIn(id,i*0.03);});
 }
 function doFlag(id){
-  const g=App.game;if(g.dead||g.won)return;
+  const g=App.game;if(!g||g.dead||g.won)return;
   const r=g.toggleFlag(id);
   if(r===null){SFX.error();return;}
   // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
-  if(r===2)App.bombMarks.add(id);else App.bombMarks.delete(id);
+  if(App.bombMarks){r===2?App.bombMarks.add(id):App.bombMarks.delete(id);}
   r===2?SFX.flag():SFX.unflag();
   syncTiles();refreshHud();checkVictory();
 }
