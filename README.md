@@ -1,32 +1,67 @@
-# CyberSweep — киберпанк-сапёр (Android)
+# CyberSweep — киберпанк-сапёр
 
-3D-сапёр в стиле киберпанк на Three.js + GSAP. Кампания из 100 уровней с резко
-растущей сложностью (от маленькой сетки до 24×24 с плотностью мин до 30%).
-Все уровни детерминированы и гарантированно решаемы без угадывания. Полностью
-офлайн: сохранения через localStorage, интерфейс только на русском языке.
+3D-сапёр на Three.js + GSAP с веб-версией и Android WebView-обёрткой.
+Кампания содержит 100 уровней, а свободная игра — 16 готовых пресетов.
+Данные уровней встроены в HTML и также хранятся в `levels.json`, поэтому игра
+не зависит от сети для загрузки базы. Прогресс хранится локально в `localStorage`.
 
 ## Готовый APK
-Скачайте `LastVersion/CyberSweep.apk` и установите на устройство (Android 7.0+).
-Разрешите установку из неизвестных источников, если ставите не из Play Market.
 
-## Сборка из исходников
-Требуются JDK 17 и Android SDK (platforms;android-34, build-tools;34.0.0).
+`LastVersion/CyberSweep.apk` — ранее собранный APK. Он не обновляется автоматически
+при изменении исходников: после исправления кода APK нужно пересобрать.
+
+## Проверка базы уровней
+
+Из корня репозитория запустите:
+
+```bash
+python tools/validate_levels.py
+```
+
+Скрипт проверяет размеры полей, число мин, подсказки, безопасные стартовые клетки,
+а также совпадение базы между веб-версией, Android-версией и встроенными данными.
+Он **не проверяет логическую решаемость**. Отдельный прогон игрового решателя
+не смог подтвердить решение без угадывания для 73 из 100 уровней кампании и
+10 из 16 пресетов. Это может быть ограничением решателя, но эти поля требуют
+дополнительной проверки или перепроектирования перед релизом.
+
+## Сборка Android
+
+Требуются JDK 17, Android SDK с платформой API 34 и установленный Gradle 8.x,
+совместимый с Android Gradle Plugin 8.5.2. В архиве нет Gradle Wrapper (`gradlew`),
+поэтому команда `./gradlew` сработает только после добавления Wrapper.
 
 ```bash
 cd android-app
-echo "sdk.dir=/path/to/android-sdk" > local.properties
-gradle assembleRelease   # или ./gradlew assembleRelease
-# результат: app/build/outputs/apk/release/app-release.apk
+# При необходимости создайте local.properties со своим путём к Android SDK:
+# sdk.dir=/path/to/android-sdk
+gradle assembleRelease
 ```
 
-После сборки обновите бинарь в репозитории:
-```bash
-cp app/build/outputs/apk/release/app-release.apk ../LastVersion/CyberSweep.apk
-```
+Результат обычно находится в `app/build/outputs/apk/release/app-release-unsigned.apk`
+для неподписанной сборки либо в `app/build/outputs/apk/release/app-release.apk`
+при настроенной подписи (имя зависит от версии Android Gradle Plugin).
+
+### Подпись Release APK
+
+Release больше не подписывается debug-ключом. Для автоматической подписи задайте
+переменные окружения перед запуском Gradle:
+
+- `CYBERSWEEP_KEYSTORE` — путь к keystore-файлу;
+- `CYBERSWEEP_KEY_ALIAS` — alias ключа;
+- `CYBERSWEEP_KEYSTORE_PASSWORD` — пароль keystore;
+- `CYBERSWEEP_KEY_PASSWORD` — пароль ключа.
+
+Не добавляйте keystore и пароли в Git. Если переменные не заданы, соберите APK,
+а затем подпишите его отдельно средствами Android SDK (`apksigner`).
+
+После сборки и проверки на устройстве можно заменить `LastVersion/CyberSweep.apk`
+новым APK. Не перезаписывайте его до проверки установки и обновления поверх старой
+версии приложения.
 
 ## Структура
-- `LastVersion/CyberSweep.apk` — последняя собранная версия игры
-- `android-app/` — исходники Android-приложения (WebView-обёртка)
-  - `app/src/main/assets/index.html` — сама игра (вся логика, HUD, рендер)
-  - `app/src/main/assets/libs/` — Three.js и GSAP (офлайн-копии)
-- `web/` — веб-версия той же игры (`index.html` + `libs/`), можно открыть в браузере
+
+- `LastVersion/CyberSweep.apk` — сохранённая сборка APK;
+- `android-app/` — Android WebView-обёртка и её локальные assets;
+- `web/` — веб-версия игры и её локальные assets;
+- `tools/validate_levels.py` — структурная проверка базы уровней.
