@@ -1,3 +1,5 @@
+# APK собирается в LastVersion/ (см. README)
+!LastVersion/CyberSweep.apk
 *.apk
 android-app/.gradle/
 android-app/**/build/
