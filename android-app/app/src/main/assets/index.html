@@ -89,6 +89,9 @@ h1.logo span{color:var(--magenta);text-shadow:0 0 14px var(--magenta)}
 .btn.small{padding:9px 12px;font-size:12px;display:inline-block;width:auto;margin:6px 8px 0 0}
 .btn.active{background:rgba(0,243,255,.22);box-shadow:0 0 18px rgba(0,243,255,.5);color:#fff}
 .row{display:flex;gap:10px}.row .btn{flex:1}
+/* Галочки выбора музыкальных треков в настройках */
+.chk{display:flex;align-items:center;gap:8px;color:var(--txt,#cfe);font-size:.95em;cursor:pointer;padding:4px 2px}
+.chk input{width:18px;height:18px;accent-color:#00f3ff;cursor:pointer}
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:18px 0}
 .stat{border:1px solid rgba(0,243,255,.25);padding:10px;background:rgba(0,243,255,.04);
   clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
@@ -251,6 +254,13 @@ body.shake #scene{animation:shk .45s linear}
       <button class="btn" id="btnSfx">Звук: ВКЛ</button>
       <button class="btn" id="btnMusic">Музыка: ВКЛ</button>
       <button class="btn" id="btnGlow">Свечение: ВКЛ</button>
+    </div>
+    <!-- Выбор треков фоновой музыки: отмеченные галочками песни играют по очереди -->
+    <div style="margin-top:10px;color:var(--txt-dim);font-size:.85em">// Треки фоновой музыки //</div>
+    <div id="musicTracks" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+      <label class="chk"><input type="checkbox" data-track="moonlight"> Бетховен — Лунная соната</label>
+      <label class="chk"><input type="checkbox" data-track="tori"> Lia — Tori no Uta (Air, OP)</label>
+      <label class="chk"><input type="checkbox" data-track="mozart"> Моцарт — Свадьба Фигаро, увертюра</label>
     </div>
     <div class="row">
       <button class="btn" id="btnQuality">Качество: ВЫСОКОЕ</button>
@@ -831,7 +841,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
   key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
-  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true}};},
+  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true}}};},
   load(){
     try{
       const raw=localStorage.getItem(this.key);
@@ -881,50 +891,75 @@ const SFX={
   }
 };
 
-/* --------- Фоновая музыка: настоящая «Лунная соната» (Бетховен, op.27 №2, ч.1) ---------
-   В APK упакован аудиофайл music/moonlight.ogg (запись из public domain-архива
-   archive.org, огранка ~2.5 мин, OGG/Opus) — играет реальное фортепиано, не синтез.
-   Если файл недоступен (например, сайт открыт без папки music) — автоматически
-   включается запасной WebAudio-синтезатор той же темы, чтобы тишины не было. */
-const MUSIC={el:null,timer:null,step:0,nextT:0,gain:null,fileOk:false,tried:false,retries:0};
+/* --------- Фоновая музыка: плейлист настоящих записей ---------
+   В APK упакованы аудиофайлы в music/ (записи из public domain-архива archive.org):
+   - moonlight.ogg — Бетховен, «Лунная соната» op.27 №2, ч.1 (фортепиано)
+   - tori_no_uta.ogg — Lia, «Tori no Uta» (鸟の詩), OP аниме «Air»
+   - mozart.ogg — Моцарт, «Свадьба Фигаро», увертюра (Крипс, 1950-е)
+   Треки играют по кругу в порядке, заданном галочками в настройках.
+   Если трек недоступен — автоматически пропускается к следующему. */
+const MUSIC={el:null,gain:null,fileOk:false,tried:false,retries:0,order:[],idx:0};
+const TRACKS=[ // id -> файл и название (порядок = порядок воспроизведения по умолчанию)
+  {id:'moonlight',file:'music/moonlight.ogg',name:'Бетховен — Лунная соната'},
+  {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (Air OP)'},
+  {id:'mozart',file:'music/mozart.ogg',name:'Моцарт — Свадьба Фигаро'}
+];
+function enabledTracks(){ // список треков, отмеченных галочками (в порядке TRACKS)
+  const t=(S&&S.tracks)||{moonlight:true,tori:true,mozart:true};
+  return TRACKS.filter(x=>t[x.id]!==false);
+}
+function playTrackAt(i){
+  const ac=audio();if(!ac)return;
+  const list=MUSIC.order;if(!list.length)return;
+  MUSIC.idx=((i%MUSIC.order.length)+MUSIC.order.length)%MUSIC.order.length;
+  if(MUSIC.el){try{MUSIC.el.pause();MUSIC.el.src='';}catch(e){}}
+  const tr=list[MUSIC.idx];
+  try{
+    const el=new Audio(tr.file);
+    el.loop=false;el.preload='auto';el.volume=1;
+    let g=null;
+    try{const src=ac.createMediaElementSource(el);g=ac.createGain();g.gain.value=0.0;src.connect(g).connect(ac.destination);}catch(e){/* без маршрутизации — играем напрямую */}
+    el.addEventListener('ended',()=>{ // конец трека — следующий из плейлиста
+      if(MUSIC.el===el)playTrackAt(MUSIC.idx+1);
+    });
+    el.addEventListener('error',()=>{ // битый/отсутствующий файл — пропускаем к следующему
+      if(MUSIC.el===el&&MUSIC.order.length>1)playTrackAt(MUSIC.idx+1);
+      else if(MUSIC.el===el){MUSIC.fileOk=false;MUSIC.tried=false;MUSIC.retries++;}
+    });
+    el.play().then(()=>{MUSIC.el=el;MUSIC.gain=g;MUSIC.fileOk=true;
+      if(g)g.gain.setTargetAtTime(0.9,ac.currentTime,1.2);}).catch(err=>{
+      console.warn('[music] autoplay заблокирован:',err&&err.name);
+      /* Разблокировка произойдёт при первом касании экрана (unlockAudio) */
+    });
+  }catch(e){/* нет файла/блокировка autoplay */}
+}
 function musicStart(){
   if(!S.music)return;
   const ac=audio();if(!ac)return;
   if(ac.state==='suspended')ac.resume().catch(()=>{});
+  const list=enabledTracks();
+  if(!list.length){musicStop(0.3);return;} // все галочки сняты — тишина
+  const ids=list.map(x=>x.id).join(',');
+  if(MUSIC.orderKey!==ids){ // изменился набор треков — пересобираем плейлист
+    MUSIC.order=list;MUSIC.orderKey=ids;
+    if(MUSIC.el){playTrackAt(0);return;} // сразу переключаемся на новый список
+  }
+  if(!MUSIC.order)MUSIC.order=list;
   if(MUSIC.el&&!MUSIC.el.paused)return; // уже играет
-  /* Первый запуск: пробуем настоящий аудиофайл через HTML5 Audio.
-     Файл moonlight.ogg лежит в APK рядом с index.html — это реальная запись
-     игры на фортепиано (Бетховен, «Лунная соната», op.27 №2, 1-я часть). */
-  if(!MUSIC.tried){
+  if(!MUSIC.tried||!MUSIC.fileOk){
     MUSIC.tried=true;
-    try{
-      const el=new Audio('music/moonlight.ogg');
-      el.loop=true;el.preload='auto';el.volume=1;
-      let g=null,src=null;
-      try{src=ac.createMediaElementSource(el);g=ac.createGain();g.gain.value=0.0;src.connect(g).connect(ac.destination);}catch(e){/* не удалось маршрутизировать — играем без gain */}
-      el.addEventListener('error',()=>{ // файл не загрузился — повторим попытку позже
-        MUSIC.fileOk=false;MUSIC.tried=false;MUSIC.retries++;
-      });
-      el.play().then(()=>{MUSIC.el=el;MUSIC.gain=g;MUSIC.fileOk=true;
-        if(g)g.gain.setTargetAtTime(0.9,ac.currentTime,1.2);}).catch(err=>{
-        console.warn('[music] autoplay заблокирован:',err&&err.name);
-        /* Разблокировка произойдёт при первом касании экрана (unlockAudio),
-           там будет вызван musicStart() и музыка стартует по-настоящему. */
-      });
-    }catch(e){/* нет файла/блокировка autoplay */}
+    playTrackAt(MUSIC.order.length?MUSIC.idx:0);
+    return;
   }
   if(MUSIC.fileOk&&MUSIC.el){ // файл уже есть — просто поднимаем громкость / возобновляем
     if(MUSIC.el.paused)MUSIC.el.play().catch(()=>{});
-    if(MUSIC.gain)MUSIC.gain.gain.setTargetAtTime(0.9,audio().currentTime,0.8);return;}
-  /* Синтез-страховка ОТКЛЮЧЁН по требованию: играет только настоящая запись.
-     Если файл ещё не готов — попробуем загрузить его повторно (до 3 раз). */
-  if(!MUSIC.tried && MUSIC.retries<3 && App.state==='MENU'){ /* повтор через unlockAudio/musicStart */ }
+    if(MUSIC.gain)MUSIC.gain.gain.setTargetAtTime(0.9,audio().currentTime,0.8);}
 }
 function musicStop(fade){
   const ac=audio();
   if(MUSIC.el){try{MUSIC.el.pause();}catch(e){}}
   if(MUSIC.gain&&ac)MUSIC.gain.gain.setTargetAtTime(0.0001,ac.currentTime,fade||0.6);
-  if(MUSIC.timer){clearInterval(MUSIC.timer);MUSIC.timer=null;}
+  MUSIC.tried=false;MUSIC.fileOk=false; // при следующем старте — перезапуск плейлиста
 }
 /* ================= [6] 3D-СЦЕНА THREE.JS ================= */
 const COLORS={
@@ -1716,7 +1751,20 @@ function updateSettingsUI(){
   $('btnGlow').textContent='Свечение: '+(S.glow?'ВКЛ':'ВЫКЛ');
   $('btnQuality').textContent='Качество: '+(S.quality?'ВЫСОКОЕ':'НИЗКОЕ');
   $('btnCam').textContent='Камера: '+(S.perspective?'ПЕРСПЕКТИВА':'ИЗОМЕТРИЯ');
+  // синхронизируем галочки треков с сохранёнными настройками
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true};
+  document.querySelectorAll('#musicTracks input[data-track]').forEach(cb=>{
+    cb.checked=S.tracks[cb.dataset.track]!==false;});
 }
+/* Обработчик галочек выбора треков: меняем плейлист на лету и сохраняем */
+document.addEventListener('change',e=>{
+  const cb=e.target.closest&&e.target.closest('#musicTracks input[data-track]');
+  if(!cb)return;
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true};
+  S.tracks[cb.dataset.track]=cb.checked;Store.save();
+  MUSIC.orderKey=null; // заставим musicStart пересобрать плейлист
+  if(S.music){MUSIC.tried=false;MUSIC.fileOk=false;musicStart();}
+});
 let orthoCam=null;
 function toggleProjection(){
   if(S.perspective){
