@@ -1023,7 +1023,7 @@ const App={
   tiles:null,flags:null,fuses:null,glows:null,board:null,plate:null,
   numbers:[],particles:null,pGeo:null,pMat:null,
   W:0,H:0,SZ:1,game:null,state:'MENU',
-  camAz:0.9,camEl:0.95,camDist:24,target:{x:0,y:0,z:0},
+  camAz:Math.PI*0.75,camEl:1.32,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1113,6 +1113,12 @@ function initScene(){
   applyTileEmissive(tileMat);
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  /* v2.3: instanceColor создаём СРАЗУ (r128 делает это лениво только внутри
+     setColorAt). Теперь все клетки лежат на одной высоте и различаются
+     ТОЛЬКО цветом — если бы цвет первой перекраски пришёлся на кадр с
+     остановленным rAF (document.hidden), клетка осталась бы белой. */
+  {const _ic=new THREE.InstancedBufferAttribute(new Float32Array(28*28*3).fill(1),3);
+   _ic.setUsage(THREE.DynamicDrawUsage);App.tiles.instanceColor=_ic;}
   /* ГЛАВНЫЙ ФИКС «неоткрытые кубы не видно / поле выглядит пустым»:
      у InstancedMesh в r128 bounding sphere считается ОДИН раз от исходной
      геометрии вокруг (0,0,0) и НЕ пересчитывается при расстановке инстансов.
@@ -1123,6 +1129,11 @@ function initScene(){
      выключено принудительно + сфера задана вручную с огромным запасом. */
   App.tiles.frustumCulled=false;
   App.tiles.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0),1e4);
+  /* v2.3 «ПЛОСКИЙ ЭКРАН + ЧУТЬ ЗАМЕТНЫЙ ОБЪЁМ»: все клетки лежат на ОДНОЙ
+     высоте (верх = TOP_ALL), поэтому боковые грани видны ТОЛЬКО у переднего
+     и правнего рёбер поля — поле читается как тонкая панель с неоновым
+     торцом. Остальным клеткам объём рисует кромка-градиент в шейдере
+     (see applyTileEmissive) и лёгкая перспектива камеры. */
   App.scene.add(App.tiles);
 
   // Маркер-«бомба» вместо треугольного флага: ТЁМНАЯ сфера (как настоящая
@@ -1175,23 +1186,30 @@ function initScene(){
 
 /* --- позиция инстанса --- */
 const _m=new THREE.Matrix4(),_q=new THREE.Quaternion(),_v=new THREE.Vector3(),_s=new THREE.Vector3(),_e=new THREE.Euler();
+/* v2.3: единая базовая матрица клетки — все плитки лежат на ОДНОЙ высоте
+   (плоский экран). setTile заполняет её один раз; applyTileAnim добавляет
+   только анимационное «выезжание снизу» (scaleY от 0 до 1 у НИЖНЕЙ грани,
+   верх всегда TOP_ALL) — промежуточные состояния считаются локально и
+   перемножаются с базой, без повторного чтения cellPos/App.SZ. */
+let _tileBaseM=new THREE.Matrix4();
+function makeTileBaseM(){
+  const h=TILE_PLATE; // толщина пластины = и открытой, и (в покое) скрытой клетки
+  _v.set(0,TOP_ALL-0.5*h,0);_q.identity();_s.set(App.SZ*0.92,h,App.SZ*0.92);
+  return new THREE.Matrix4().compose(_v,_q,_s);
+}
 function cellPos(id){
   return {x:(id%App.W-(App.W-1)/2)*App.SZ,y:0,z:(((id/App.W)|0)-(App.hFix-1)/2)*App.SZ};
 }
 function setTile(id,flipY,scaleY,color){
-  /* ===== ФИКС v2.1.9 «кубы ПОД полем / пластины ВИСЯТ НАД полом» =====
-     Геометрия теперь ОДНА на все случаи (см. tileBotY/tileTopY):
-       скрытая клетка — куб с основанием на уровне ДНА плиты (y=0), верх на
-       y=tileH(TILE_HIDDEN) — куб стоит НА поле и возвышается над ним;
-       открытая клетка — тонкая пластина, ВЕРХ ровно на уровне пола FLOOR_Y,
-       низ чуть ниже — цифра лежит на полу поля, ничего не висит в воздухе.
-     Инстанс-матрицы пишутся ВСЕГДА в нормированном состоянии (scaleY=1);
-     промежуточные кадры GSAP живут только в App.tileAnim[id] (applyTileAnim). */
+  /* ===== v2.3 «ПЛОСКИЙ ЭКРАН СВЕРХУ» =====
+     Геометрия клетки НЕ зависит от состояния: верх всех клеток на TOP_ALL.
+     Скрытая/открытая различаются ТОЛЬКО цветом инстанса (индиго/графит)
+     и цифрой-накладкой. flipY/scaleY оставлены в сигнатуре для совместимости
+     со старыми вызовами, но на матрицу больше не влияют (кроме анимаций,
+     которые живут в App.tileAnim и применяются в applyTileAnim). */
   const p=cellPos(id);
-  const h=tileH(flipY); // реальная высота блока при scaleY===1
-  _v.set(p.x,tileTopY(flipY)-0.5*h,p.z);
-  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92,h,App.SZ*0.92);
-  _m.compose(_v,_q,_s);
+  _m.copy(_tileBaseM);
+  _m.setPosition(p.x,TOP_ALL-0.5*TILE_PLATE,p.z);
   App.tiles.setMatrixAt(id,_m);
   if(color!==undefined)App.tiles.setColorAt(id,color);
   setOutline(id,flipY); // тёмная рамка клетки (см. tileTopY/setOutline)
@@ -1203,16 +1221,14 @@ function applyTileAnim(id){
   const p=cellPos(id);
   const open=a.o===1; // цель твина: 1=TILE_HIDDEN (пред-анимация старта уровня)
   const base=open?TILE_HIDDEN:TILE_OPEN;
-  /* ФИКС v2.1.9: анимация меняет ТОЛЬКО высоту блока; верх открытой клетки
-     всегда прижат к полу FLOOR_Y, низ уходит вниз — пластина не «висит». */
-  const h=tileH(base)*a.s;
-  /* ФИКС v2.2.1: анимация меняет только ВЫСОТУ блока; верх клетки при этом
-     плавно опускается от верха куба (FLOOR_Y+STEP_LIFT) к общему верху
-     рельефа tileTopY(TILE_OPEN)=FLOOR_Y+STEP_LIFT — единая плоскость,
-     пластина с цифрой не «висит» и не «тонет». */
-  const top=FLOOR_Y+tileH(TILE_HIDDEN)*a.s;
-  _v.set(p.x,top-0.5*h,p.z);
-  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92*a.s,h,App.SZ*0.92*a.s);
+  /* v2.3 «ПЛОСКИЙ ЭКРАН»: анимация НЕ меняет высоту — верх клетки всегда на
+     единой плоскости TOP_ALL; масштаб a.s=0..1 управляет НИЖНЕЙ гранью:
+     при открытии клетка плавно «выезжает» из-под доски, при старте уровня —
+     опускается сверху. На s=1 скрытая и открытая клетки выглядят ОДИНАКОВО
+     по геометрии — различие только в цвете/цифре. */
+  const h=Math.max(tileH(base)*a.s,0.001);
+  _v.set(p.x,TOP_ALL-0.5*h,p.z);
+  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92,h,App.SZ*0.92);
   _m.compose(_v,_q,_s);
   App.tiles.setMatrixAt(id,_m);
 }
@@ -1238,7 +1254,10 @@ function setDeco(mesh,id,on,lift,color,scl){
    читался. Теперь скрытая плитка — ярко-белая, открытая — глубокий графит
    (#141b26): контраст считывается мгновенно, а светлые неоновые цифры на
    тёмном фоне читаются намного лучше. */
-const cHidden=new THREE.Color(0xdde4ee),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xbdf6ff),cDead=new THREE.Color(0x2a0d12);
+/* v2.3: закрытые клетки — КИБЕРПАНК-ИНДИГО (#1b2a66) вместо фулл-белого:
+   на тёмном фоне читается и цвет, и неоновая кромка объёма; подсветка под
+   курсором — электрик-циан, открытая — глубокий графит. */
+const cHidden=new THREE.Color(0x1b2a66),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0x2f7bff),cDead=new THREE.Color(0x2a0d12);
 /* ОБЪЁМ КЛЕТОК (ФИНАЛЬНЫЙ ФИКС «поле выглядит пустым, кубов не видно»):
    1) Раньше скрытая клетка была высотой ~App.SZ (0.3 м на больших полях) —
       плоский «блин», перепад с открытой пластиной не читался. Теперь высота
@@ -1248,17 +1267,21 @@ const cHidden=new THREE.Color(0xdde4ee),cOpen=new THREE.Color(0x141b26),cHot=new
    2) Верхняя грань скрытого блока — почти белая (#dde4ee), боковые грани
       затемнены directional-светом и контровым светом — блок читается как 3D.
    3) Цифры лежат на дне ямы — гарантированно поверх тёмной пластины. */
-const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // нормированные высоты скрытой / открытой клетки
+const TILE_HIDDEN=1.0,TILE_OPEN=0.3; // нормированные высоты скрытой / открытой клетки (v2.3: одинаковый ВЕРХ у всех клеток)
 const FLOOR_Y=0.3;                    // верх плиты-основания доски = уровень пола поля (плита: y=-0.05..0.3)
 const STEP_LIFT=0.2;                  // высота возвышения КЛЕТКИ над сеткой пола
-/* ===== ФИКС v2.2.1 «слишком высокие кубы» + единый рельеф 0.2 =====
-   По требованию игрока И закрытые кубы, И открытые пластины возвышаются
-   над сеткой пола ровно на STEP_LIFT=0.2 м:
-     верх скрытого куба    = FLOOR_Y + 0.2;
-     верх открытой пластины= FLOOR_Y + 0.2 (низ чуть ниже — тонкий блок);
-   перепад высот между ними = 0.2*(TILE_HIDDEN-TILE_OPEN) ≈ 0.176 м —
-   читается как ступенька, но ничего не является «башней». */
-const TILE_HID=STEP_LIFT/FLOOR_Y;     // => реальная высота скрытого блока = 0.2 м
+/* ===== v2.3 «УХОД ОТ 3D-ТЕМЫ»: ПЛОСКИЙ ЭКРАН СВЕРХУ =====
+   Все клетки лежат на ОДНОЙ плоскости TOP_ALL — никакого рельефа/ступенек.
+   Скрытая клетка = блок от дна HIDDEN_BOTTOM до TOP_ALL, открытая = тонкая
+   пластина толщиной TILE_PLATE у того же верха. Разница состояний читается
+   ЦВЕТОМ (индиго vs графит) и цифрой; «чуть заметный объём» дают:
+     - лёгкая перспектива камеры (camEl ~76°, фиксированный azimut);
+     - неоновая кромка-градиент в шейдере плиток (applyTileEmissive);
+     - видимый торец поля по нижнему/правому краю доски. */
+const TILE_PLATE=STEP_LIFT;           // толщина пластины каждой клетки (=0.2 м)
+const TOP_ALL=FLOOR_Y+STEP_LIFT;      // ЕДИНЫЙ верх всех клеток = 0.5
+const HIDDEN_BOTTOM=-0.25;            // дно скрытой клетки: НИЖЕ плиты (0.35 м под полом) — при открытии клетка плавно «выезжает» из-под доски, край остаётся невидимым
+const TILE_HID=(TOP_ALL-HIDDEN_BOTTOM)/STEP_LIFT; // => реальная высота скрытого блока = 0.75 м
 /* ===== ФИКС v2.1.9 «закрытые кубы ПОД полем, открытые пластины ВИСЯТ НАД НИМ» =====
    ПРЕДЫСТОРИЯ (почему не работало): в tileTopY(fy)=FLOOR_Y+(tileH(HIDDEN)-tileH(fy))
    слагалась ПОЛНАЯ высота блока (TILE_HIDDEN=1.0!). Для открытой клетки это
@@ -1278,8 +1301,8 @@ let WELL_K=2.2, WELL_DEPTH=FLOOR_Y;   // WELL_DEPTH теперь = уровен�
                       тоньше (низ глубже) — цифра лежит на одной высоте с
                       верхушками кубов, ничего не висит и не проваливается;
      анимация открытия опускает верх клетки от уровня куба к общему верху. */
-function tileH(fy){return fy*STEP_LIFT;}                 // реальная высота блока в метрах (скрытый = 0.2)
-function tileTopY(fy){return FLOOR_Y+tileH(TILE_HIDDEN);} // ВСЕ клетки: верх = пол + 0.2 (единая плоскость!)
+function tileH(fy){return fy===TILE_HIDDEN?(TOP_ALL-HIDDEN_BOTTOM):TILE_PLATE;} // v2.3: скрытый = 0.75 м, открытая пластина = 0.2 м
+function tileTopY(fy){return TOP_ALL;} // v2.3: ЕДИНЫЙ верх всех клеток (плоский экран)
 function tileBotY(fy){return tileTopY(fy)-tileH(fy);}     // низ блока = верх минус его высота
 /* ФИКС v2.1.8 «кубы ПОД полем, длинные, по ним можно кликать, цифр не видно».
    ПРЕДЫСТОРИЯ ОШИБОК:
@@ -1328,9 +1351,17 @@ function applyTileEmissive(mat){
        где vertexColors=false (vColor не объявлен) → Error GL_INVALID_OPERATION,
        плитки НЕ рендерились, поле выглядело пустым. Вставляем умножение ТОЛЬКО
        внутри блока #ifdef USE_COLOR, который Three.js сам добавляет при
-       vertexColors:true (а instanceColor включает именно его). */
+       vertexColors:true (а instanceColor включает именно его).
+       v2.3 «ЧУТЬ ЗАМЕТНЫЙ ОБЪЁМ» на плоском экране: диагональный градиент
+       яркости грани (1.16 сверху-слева … 0.84 снизу-справа — плитка читается
+       как слегка выпуклая панель) + НЕОНОВЫЙ ЦВЕТНОЙ контур по периметру
+       каждой клетки — закрытые клетки гарантированно различимы. Вставки
+       внутри #ifdef USE_COLOR: у flags/fuses vertexColors=false, их шейдер
+       остаётся нетронутым. */
+    sh.fragmentShader=sh.fragmentShader.replace('#include <common>',
+      '#include <common>\n#ifdef USE_COLOR\nvarying vec2 vUv;\n#endif');
     sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',
-      '#include <emissivemap_fragment>\n#ifdef USE_COLOR\n\ttotalEmissiveRadiance *= vColor;\n#endif');
+      '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ndiffuseColor.rgb*=clamp(1.15-(vUv.x+vUv.y-1.0)*0.16,0.8,1.2);\n\ttotalEmissiveRadiance *= vColor;\nfloat _ed=min(min(vUv.x,1.0-vUv.x),min(vUv.y,1.0-vUv.y));\n\ttotalEmissiveRadiance += vColor*smoothstep(0.07,0.0,_ed)*0.9+vec3(0.02,0.06,0.14)*(1.0-smoothstep(0.0,0.05,_ed));\n#endif');
   };
   mat.needsUpdate=true;
 }
@@ -1384,17 +1415,17 @@ function syncTiles(idsChanged){
     if(g.state[id]===2){
       /* ФИКС v2.1.9: метка ставится НА ВЕРХ куба (низ блока = 0, верх = h),
          раньше высота бралась из старой «ямы» и бомба тонула в кубе. */
-      const lift=tileH(TILE_HIDDEN)+0.05;
+      const lift=STEP_LIFT+0.05; // v2.3: метка стоит на единой плоскости поля
       setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
       setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
       // СТРАХОВКА: если флаг по какой-то причине «потерялся» в state, но
       // метка ещё в списке — рисуем бомбу поверх скрытой клетки в любом случае.
-      const lift=tileH(TILE_HIDDEN)+0.05;
+      const lift=STEP_LIFT+0.05; // v2.3: метка стоит на единой плоскости поля
       setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
       setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     }
-    if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,tileH(TILE_HIDDEN)*0.5,new THREE.Color(COLORS.cyan),1.05);
+    if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,STEP_LIFT*0.5,new THREE.Color(COLORS.cyan),1.05);
   }
   finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);
   updateNumbers();
@@ -1466,7 +1497,7 @@ function updateNumbers(){
       const p=cellPos(id);
       /* Накладка лежит НА тонкой пластине открытой клетки (TILE_OPEN*Sz —
          верхняя грань), с небольшим запасом против z-fighting. */
-      sp.position.set(p.x,tileTopY(TILE_OPEN)+0.02,p.z); // верх пластины открытой клетки + запас от z-fighting
+      sp.position.set(p.x,TOP_ALL+0.02,p.z); // v2.3: цифры лежат на единой плоскости поля
       sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
       sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
@@ -1480,6 +1511,7 @@ function buildBoard(){
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
   App.SZ=Math.min(0.85,26/Math.max(g.w,g.h)); // шаг сетки фиксирован (высота клеток = STEP_LIFT)
+  makeTileBaseM(); // v2.3: базовая матрица клетки пересчитывается под новый шаг сетки
   updateWell(); // уровень пола ямы = верх плиты доски (FLOOR_Y) — см. tileTopY
   // плита: ВЕРХ на уровне FLOOR_Y (пол поля). Раньше позиция считалась от
   // tileTopY(TILE_OPEN)-0.225 и при нулевом WELL_DEPTH плита уезжала вниз,
@@ -1491,9 +1523,9 @@ function buildBoard(){
   const eg=new THREE.EdgesGeometry(new THREE.BoxGeometry((g.w+1.6)*App.SZ,0.36,(g.h+1.6)*App.SZ));
   App.frame=new THREE.LineSegments(eg,new THREE.LineBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.7}));
   App.frame.position.y=FLOOR_Y+0.18;App.scene.add(App.frame);
-  // камера: цель — середина высоты скрытых блоков НАД полом; иначе кубы
-  // дальних рядов уходят за край экрана и поле выглядит пустым сверху.
-  App.target.y=FLOOR_Y+tileH(TILE_HIDDEN)*0.5; // центр объёма клеток (низ FLOOR_Y, верх +0.2)
+  // v2.3: плоское поле — все клетки на единой плоскости TOP_ALL,
+  // цель камеры — центр тонкой панели (лёгкая перспектива сверху).
+  App.target.y=TOP_ALL-0.1;
   App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*1.3+8);
   applyCamera();
   syncTiles();
@@ -1681,9 +1713,8 @@ function onMove(e){
   Cam.px=e.clientX;Cam.py=e.clientY;
   Cam.moved+=Math.abs(dx)+Math.abs(dy);
   if(Cam.moved>8){clearHold();}
-  App.camAz-=dx*0.006;
-  App.camEl=Math.max(0.12,Math.min(1.45,App.camEl-dy*0.005));
-  applyCamera();
+  /* v2.3: уход от 3D-темы — поле статично сверху, вращение камеры отключено
+     (остался только зум колесом/щипком в onWheel/onPinch). */
 }
 function onUp(e){
   const wasDrag=Cam.moved>8;
@@ -2202,10 +2233,9 @@ function makeOrtho(){
 }
 function applyCamera(){
   if(App.camera.isOrthographicCamera){
-    // в орто-режиме фиксируем изометрический угол
-    App.camEl=0.615;App.camAz=Math.PI*0.75;
-    const dist=App.camDist;
-    App.camera.position.set(App.target.x+dist*0.577,App.target.y+dist*0.816,App.target.z+dist*0.577);
+    /* v2.3: орто-режим использует ту же почти-вертикальную камеру (applyCameraTo),
+       чтобы вид оставался статичным сверху и не прыгал в изометрию 45°. */
+    applyCameraTo(App.camera);
     App.camera.lookAt(App.target.x,App.target.y,App.target.z);
     const d=Math.max(6,dist*0.62),asp=innerWidth/innerHeight;
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
