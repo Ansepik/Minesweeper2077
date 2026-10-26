@@ -877,7 +877,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
-  key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
+  key:'cybersweep_save_v3', // v3: сброс настроек треков (плейлист открывает «Рюкзак», заглушки удалены)
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -936,10 +936,10 @@ const SFX={
    только для синтеза звуковых эффектов. */
 const MUSIC={el:null,volsent:false,fileOk:false,tried:false,retries:0,order:[],idx:0};
 const TRACKS=[ // id -> файл и название (порядок = порядок воспроизведения по умолчанию)
-  {id:'moonlight',file:'music/moonlight.ogg',name:'Бетховен — Лунная соната'},
-  {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (вокал, Air OP)'},
-  {id:'mozart',file:'music/mozart.ogg',name:'Моцарт — Свадьба Фигаро'},
-  {id:'rucksack',file:'music/rucksack.ogg',name:'Рэйди — Рюкзак'}
+  {id:'rucksack',file:'music/rucksack.mp3',name:'Рэйди — Рюкзак'},
+  {id:'moonlight',file:'music/moonlight.mp3',name:'Бетховен — Лунная соната'},
+  {id:'tori',file:'music/tori_no_uta.mp3',name:'Lia — Tori no Uta (вокал, Air OP)'},
+  {id:'mozart',file:'music/mozart.mp3',name:'Моцарт — Свадьба Фигаро'}
 ];
 function enabledTracks(){ // список треков, отмеченных галочками (в порядке TRACKS)
   const t=(S&&S.tracks)||{moonlight:true,tori:true,mozart:true,rucksack:true};
@@ -1044,7 +1044,7 @@ function initScene(){
   document.getElementById('scene').appendChild(App.renderer.domElement);
 
   // Освещение: холодный верх + неоновые пуш-лайты
-  App.scene.add(new THREE.AmbientLight(0x2a3b46,0.9));
+  App.scene.add(new THREE.AmbientLight(0x2a3b46,0.75)); // приглушён: боковые грани кубов темнее верха
   const dl=new THREE.DirectionalLight(0xbfefff,0.75);dl.position.set(6,14,8);App.scene.add(dl);
   const l1=new THREE.PointLight(COLORS.cyan,0.8,40);l1.position.set(-8,6,-6);App.scene.add(l1);
   const l2=new THREE.PointLight(COLORS.magenta,0.7,40);l2.position.set(8,5,6);App.scene.add(l2);
@@ -1075,6 +1075,16 @@ function initScene(){
   applyTileEmissive(tileMat);
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  /* ГЛАВНЫЙ ФИКС «неоткрытые кубы не видно / поле выглядит пустым»:
+     у InstancedMesh в r128 bounding sphere считается ОДИН раз от исходной
+     геометрии вокруг (0,0,0) и НЕ пересчитывается при расстановке инстансов.
+     Плитки лежат на плите y>=0, а центр сферы — y~0.5*Sz; на полях 20x20+
+     радиус сферы (~13 м) НЕ покрывает углы доски → скрытые кубы в дальней
+     половине поля молча отсекались frustum culling'ом камеры: игрок видел
+     «пустое» поле с тонкими пластинами вместо объёмных блоков. Отсечение
+     выключено принудительно + сфера задана вручную с огромным запасом. */
+  App.tiles.frustumCulled=false;
+  App.tiles.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0),1e4);
   App.scene.add(App.tiles);
 
   // Маркер-«бомба» вместо треугольного флага: ТЁМНАЯ сфера (как настоящая
@@ -1132,8 +1142,8 @@ function cellPos(id){
 }
 function setTile(id,flipY,scaleY,color){
   const p=cellPos(id);
-  _v.set(p.x,0.5*flipY*scaleY,p.z);
-  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92*scaleY,flipY*scaleY,App.SZ*0.92*scaleY);
+  _v.set(p.x,0.5*tileH(flipY*scaleY),p.z);
+  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92*scaleY,tileH(flipY*scaleY),App.SZ*0.92*scaleY);
   _m.compose(_v,_q,_s);
   App.tiles.setMatrixAt(id,_m);
   if(color!==undefined)App.tiles.setColorAt(id,color);
@@ -1160,22 +1170,22 @@ function setDeco(mesh,id,on,lift,color,scl){
    читался. Теперь скрытая плитка — ярко-белая, открытая — глубокий графит
    (#141b26): контраст считывается мгновенно, а светлые неоновые цифры на
    тёмном фоне читаются намного лучше. */
-const cHidden=new THREE.Color(0xf2f5fa),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xbdf6ff),cDead=new THREE.Color(0x2a0d12);
-/* --- ОБЪЁМ КЛЕТОК (фикс «поле выглядит пустым / всё как будто открыто»):
-   1) Плитки были одинаковой высоты: скрытая fy=1 и открытая 0.16 при шаге
-      клетки App.SZ — на больших полях куб скрытой клетки ~0.1 м, перепад
-      высот нечитаем, поле кажется плоским «пустым». Теперь скрытая клетка —
-      полноценный объёмный блок (выше основания), открытая — тонкая пластина:
-      рельеф виден даже с большого расстояния.
-   2) ЧИСТЫЙ БЕЛЫЙ (0xffffff) в r128 без sRGB-конверсии конвертировался в
-      линейное пространство и после кодирования выводился пересвеченным —
-      верхняя грань сливалась с неоном подсветок, грани различались плохо.
-      Скрытый цвет теперь слегка холодный (#f2f5fa) — остаётся белым для
-      глаза, но не выбит.
-   3) Цифровые накладки раньше красились в тот же цвет, что и плитка, —
-      визуально это выглядело как «открытая пустая клетка». Накладка теперь
-      тёмная графитовая с неоновой рамкой: цифра читается мгновенно. */
-const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // высоты скрытой / открытой клетки (в единицах flipY)
+const cHidden=new THREE.Color(0xdde4ee),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xbdf6ff),cDead=new THREE.Color(0x2a0d12);
+/* ОБЪЁМ КЛЕТОК (ФИНАЛЬНЫЙ ФИКС «поле выглядит пустым, кубов не видно»):
+   1) Раньше скрытая клетка была высотой ~App.SZ (0.3 м на больших полях) —
+      плоский «блин», перепад с открытой пластиной не читался. Теперь высота
+      скрытого блока = TILE_HID * App.SZ (в 2.5+ раза выше шага клетки) —
+      настоящие объёмные колонны; открытые клетки уходят НИЖЕ уровня пола
+      (отрицательная высота, «яма»), поэтому разница рельефа максимальна.
+   2) Верхняя грань скрытого блока — почти белая (#dde4ee), боковые грани
+      затемнены directional-светом и контровым светом — блок читается как 3D.
+   3) Цифры лежат на дне ямы — гарантированно поверх тёмной пластины. */
+const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // нормированные высоты скрытой / открытой клетки
+const TILE_HID=2.6;                   // множитель реальной высоты скрытого блока (объёмные кубы)
+/* Реальная высота клетки в метрах: скрытая — высокий блок, открытая — тонкая
+   пластина на уровне пола. Все места, где раньше стояло «flipY*App.SZ», теперь
+   используют эту функцию — иначе масштаб и позиция разъезжались. */
+function tileH(fy){return fy*App.SZ*TILE_HID;}
 /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА» (ГЛАВНАЯ причина): раньше этот блок стоял
    ПОСЛЕ объявления const _m=new THREE.Matrix4() и обращался к App.tileMat,
    который создаётся только внутри initScene(). В момент разбора скрипта
@@ -1193,7 +1203,7 @@ function applyTileEmissive(mat){
   mat.needsUpdate=true;
 }
 function syncTiles(idsChanged){
-  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(0.85,26/Math.max(App.game.w,App.game.h));
+  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(0.85,26/(Math.max(App.game.w,App.game.h)*TILE_HID));
   const g=App.game;
   for(let id=0;id<g.total;id++){
     const st=g.state[id];
@@ -1320,7 +1330,7 @@ function updateNumbers(){
       const p=cellPos(id);
       /* Накладка лежит НА тонкой пластине открытой клетки (TILE_OPEN*Sz —
          верхняя грань), с небольшим запасом против z-fighting. */
-      sp.position.set(p.x,TILE_OPEN*App.SZ+0.02,p.z);
+      sp.position.set(p.x,tileH(TILE_OPEN)+0.02,p.z);
       sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
       sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
@@ -1333,7 +1343,7 @@ function buildBoard(){
   clearNumbers();
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
-  App.SZ=Math.min(0.85,26/Math.max(g.w,g.h));
+  App.SZ=Math.min(0.85,26/(Math.max(g.w,g.h)*TILE_HID));
   // плита
   App.plate.scale.set((g.w+1.6)*App.SZ,0.35,(g.h+1.6)*App.SZ);
   App.plate.position.set(0,-0.2,0);
@@ -1343,7 +1353,7 @@ function buildBoard(){
   App.frame=new THREE.LineSegments(eg,new THREE.LineBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.7}));
   App.frame.position.y=-0.02;App.scene.add(App.frame);
   // камера дистанция
-  App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*1.15+6);
+  App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*TILE_HID*1.15+TILE_HID*App.SZ*2+6);
   applyCamera();
   syncTiles();
 }
@@ -1453,6 +1463,12 @@ function pickCell(ev){
   App.pointerNdc.x=((ev.clientX-r.left)/r.width)*2-1;
   App.pointerNdc.y=-((ev.clientY-r.top)/r.height)*2+1;
   App.raycaster.setFromCamera(App.pointerNdc,App.camera);
+  /* ФИКС «клик мимо / не попадал по кубам»: для InstancedMesh рейкаст в r128
+     сначала проверяет bounding sphere МЕША — она была выставлена вручную на
+     радиус 1e4 и на больших полях давала ложные «хиты» по несуществующим
+     клеткам. Теперь sphere отключена, а проверка границ выполняется явно по
+     instanceId (< total). */
+  App.tiles.geometry.boundingSphere=null;
   const hits=App.raycaster.intersectObject(App.tiles,false);
   if(!hits.length)return -1;
   const id=hits[0].instanceId;
@@ -1778,7 +1794,7 @@ function launchLevel(lv){
   catch(err){console.error('[launch] buildBoard',err);toast('СБОЙ 3D: '+err.message);return;}
   syncTiles();
   // волна «проявки» стартовой зоны
-  for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,1,1,cOpen);
+  for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,TILE_HIDDEN,1,cOpen);
   if(window.gsap){
     const objs=[];for(let id=0;id<g.total;id++)if(g.state[id]===1)objs.push(id);
     objs.forEach((id,i)=>T.flipIn(id,Math.min(0.6,i*0.02)));
@@ -2044,7 +2060,7 @@ function applyCamera(){
   }
 }
 function applyCameraTo(cam){
-  const el=Math.max(0.18,App.camEl);
+  const el=Math.max(0.45,App.camEl);
   cam.position.set(
     App.target.x+App.camDist*Math.sin(el)*Math.cos(App.camAz),
     App.target.y+App.camDist*Math.cos(el),
