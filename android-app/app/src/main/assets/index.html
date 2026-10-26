@@ -1065,6 +1065,10 @@ function initScene(){
   const tileGeo=new THREE.BoxGeometry(1,1,1);
   const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.42,metalness:0.35});
   App.tileMat=tileMat; // ссылка для onBeforeCompile (см. ниже)
+  /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА»: emissive-хук навешивается ЗДЕСЬ, сразу
+     после создания материала (раньше код стоял вне initScene() и падал с
+     TypeError на undefined App.tileMat, обрывая весь скрипт). */
+  applyTileEmissive(tileMat);
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   App.scene.add(App.tiles);
@@ -1147,17 +1151,22 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* Открытые клетки (с цифрами) — того же цвета, что и поле: так сразу видно,
    что клетка уже «прожата». Отличие только по высоте (плита ниже скрытой). */
 const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0xBD5D9C),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
-/* ФИКС «после аккорда цифры не появляются» (ГЛАВНАЯ причина): у MeshStandardMaterial
-   цвет инстанса ПЕРЕМНОЖАЕТСЯ на diffuse 0xffffff, а emissive оставался чёрным —
-   при слабом освещении графитовые плитки открытых клеток сливались с тёмной
-   подложкой, и плоские цифры-накладки на их фоне были неразличимы. Теперь
-   материал излучает цвет самой клетки (vertexColors+emissive через onBeforeCompile):
-   открытая клетка светится своим цветом всегда — цифры видны безусловно. */
-App.tileMat.onBeforeCompile=function(sh){
-  sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',
-    '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vColor;');
-};
-App.tileMat.needsUpdate=true;
+/* ФИКС «бесконечная ЗАГРУЗКА ЯДРА» (ГЛАВНАЯ причина): раньше этот блок стоял
+   ПОСЛЕ объявления const _m=new THREE.Matrix4() и обращался к App.tileMat,
+   который создаётся только внутри initScene(). В момент разбора скрипта
+   App.tileMat === undefined → TypeError прерывал весь последний <script>,
+   из-за чего boot()/safeBoot/watchdog никогда не определялись и экран
+   «ЗАГРУЗКА ЯДРА…» не исчезал НИКОГДА. Теперь присваивание onBeforeCompile
+   выполняется ВНУТРИ initScene() сразу после создания материала, а здесь —
+   только безопасное определение функции-хука (без обращения к App). */
+function applyTileEmissive(mat){
+  if(!mat||!mat.isMaterial)return; // страховка: никогда не падаем на undefined
+  mat.onBeforeCompile=function(sh){
+    sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',
+      '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vColor;');
+  };
+  mat.needsUpdate=true;
+}
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
   const g=App.game;

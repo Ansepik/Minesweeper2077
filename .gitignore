@@ -1,11 +1,6 @@
-# APK собирается в LastVersion/ (см. README)
-!LastVersion/CyberSweep.apk
-*.apk
-android-app/.gradle/
-android-app/**/build/
-android-app/local.properties
-*.lock
+node_modules/
 *.log
-*.jks
-*.keystore
-*.p12
+*.tmp
+
+test2.js
+test_boot_tmp.js
