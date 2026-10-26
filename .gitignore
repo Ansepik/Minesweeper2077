@@ -1,6 +1,2 @@
 node_modules/
-*.log
 *.tmp
-
-test2.js
-test_boot_tmp.js

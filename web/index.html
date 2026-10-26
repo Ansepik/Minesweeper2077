@@ -259,7 +259,7 @@ body.shake #scene{animation:shk .45s linear}
     <div style="margin-top:10px;color:var(--txt-dim);font-size:.85em">// Треки фоновой музыки //</div>
     <div id="musicTracks" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
       <label class="chk"><input type="checkbox" data-track="moonlight"> Бетховен — Лунная соната</label>
-      <label class="chk"><input type="checkbox" data-track="tori"> Lia — Tori no Uta (Air, OP)</label>
+      <label class="chk"><input type="checkbox" data-track="tori"> Lia — Tori no Uta (вокал, Air OP)</label>
       <label class="chk"><input type="checkbox" data-track="mozart"> Моцарт — Свадьба Фигаро, увертюра</label>
       <label class="chk"><input type="checkbox" data-track="vchno17"> Pyrokinesis — Вечно 17</label>
     </div>
@@ -937,7 +937,7 @@ const SFX={
 const MUSIC={el:null,volsent:false,fileOk:false,tried:false,retries:0,order:[],idx:0};
 const TRACKS=[ // id -> файл и название (порядок = порядок воспроизведения по умолчанию)
   {id:'moonlight',file:'music/moonlight.ogg',name:'Бетховен — Лунная соната'},
-  {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (Air OP)'},
+  {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (вокал, Air OP)'},
   {id:'mozart',file:'music/mozart.ogg',name:'Моцарт — Свадьба Фигаро'},
   {id:'vchno17',file:'music/vchno17.ogg',name:'Pyrokinesis — Вечно 17'}
 ];
@@ -1148,9 +1148,15 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* Кубы: по запросу игрока — цвет скрытых клеток ближе к #BD5D9C (припылённый
    сиренево-розовый). Открытая клетка — глубокий графит для контраста с цифрами,
    подсветка под курсором — светлее базового, взорванная — тёмно-малиновый. */
-/* Открытые клетки (с цифрами) — того же цвета, что и поле: так сразу видно,
-   что клетка уже «прожата». Отличие только по высоте (плита ниже скрытой). */
-const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0xBD5D9C),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
+/* ФИКС «неоткрытые клетки не видно — всё поле выглядит открытым»:
+   раньше cHidden и cOpen были ОДНИМ И ТЕМ ЖЕ цветом (0xBD5D9C), поэтому
+   единственными признаками открытой клетки оставались высота (1 против 0.16)
+   и цифра-накладка; при мелком масштабе больших полей перепад высот почти
+   не читался и всё поле казалось «прожатым». Теперь открытая клетка —
+   глубокий графит (#141b26): контраст с розово-сиреневыми скрытыми плитами
+   мгновенно считывается, а светлые неоновые цифры на тёмном фоне читаются
+   намного лучше. */
+const cHidden=new THREE.Color(0xBD5D9C),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xd98fc0),cDead=new THREE.Color(0x2a0d12);
 /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА» (ГЛАВНАЯ причина): раньше этот блок стоял
    ПОСЛЕ объявления const _m=new THREE.Matrix4() и обращался к App.tileMat,
    который создаётся только внутри initScene(). В момент разбора скрипта
