@@ -1179,19 +1179,14 @@ function cellPos(id){
   return {x:(id%App.W-(App.W-1)/2)*App.SZ,y:0,z:(((id/App.W)|0)-(App.hFix-1)/2)*App.SZ};
 }
 function setTile(id,flipY,scaleY,color){
-  /* ===== АРХИТЕКТУРНЫЙ ФИКС «закрытых клеток не видно» =====
-     Инстанс-матрицы и цвета ВСЕГДА пишутся в нормированное состояние
-     (scaleY=1): flipY здесь — НОРМИРОВАННАЯ целевая высота (TILE_HIDDEN или
-     TILE_OPEN), а не промежуточное значение GSAP-твина. Промежуточные кадры
-     анимации уходят только в App.tileAnim[id] как scale.y.
-
-     Почему это обязательно: раньше tвин писал матрицу инстанса с НЕЦЕЛОЧНЫМ
-     scaleY (например 0.63), а syncTiles() при любом внешнем событии (флаг,
-     peek, взрыв соседней клетки) перезаписывал матрицу ЦЕЛОЙ скрытой плиткой
-     → куб мгновенно «выпрыгивал» обратно на полную высоту; в других случаях
-     порядок записи/needsUpdate терялся и плитки оставались нулевого масштаба
-     (невидимые). Теперь два канала разделены: базовая матрица стабильна,
-     анимация живёт поверх неё и никогда её не портит. */
+  /* ===== ФИКС v2.1.9 «кубы ПОД полем / пластины ВИСЯТ НАД полом» =====
+     Геометрия теперь ОДНА на все случаи (см. tileBotY/tileTopY):
+       скрытая клетка — куб с основанием на уровне ДНА плиты (y=0), верх на
+       y=tileH(TILE_HIDDEN) — куб стоит НА поле и возвышается над ним;
+       открытая клетка — тонкая пластина, ВЕРХ ровно на уровне пола FLOOR_Y,
+       низ чуть ниже — цифра лежит на полу поля, ничего не висит в воздухе.
+     Инстанс-матрицы пишутся ВСЕГДА в нормированном состоянии (scaleY=1);
+     промежуточные кадры GSAP живут только в App.tileAnim[id] (applyTileAnim). */
   const p=cellPos(id);
   const h=tileH(flipY); // реальная высота блока при scaleY===1
   _v.set(p.x,tileTopY(flipY)-0.5*h,p.z);
@@ -1208,8 +1203,10 @@ function applyTileAnim(id){
   const p=cellPos(id);
   const open=a.o===1; // цель твина: 1=TILE_HIDDEN (пред-анимация старта уровня)
   const base=open?TILE_HIDDEN:TILE_OPEN;
+  /* ФИКС v2.1.9: анимация меняет ТОЛЬКО высоту блока; верх открытой клетки
+     всегда прижат к полу FLOOR_Y, низ уходит вниз — пластина не «висит». */
   const h=tileH(base)*a.s;
-  _v.set(p.x,(open?tileTopY(TILE_HIDDEN):tileTopY(TILE_OPEN))*a.s-0.5*h,p.z);
+  _v.set(p.x,FLOOR_Y-0.5*h,p.z);
   _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92*a.s,h,App.SZ*0.92*a.s);
   _m.compose(_v,_q,_s);
   App.tiles.setMatrixAt(id,_m);
@@ -1248,10 +1245,20 @@ const cHidden=new THREE.Color(0xdde4ee),cOpen=new THREE.Color(0x141b26),cHot=new
    3) Цифры лежат на дне ямы — гарантированно поверх тёмной пластины. */
 const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // нормированные высоты скрытой / открытой клетки
 const TILE_HID=2.6;                   // множитель реальной высоты скрытого блока (объёмные кубы)
-/* Реальная высота клетки в метрах: скрытая — высокий блок, открытая — тонкая
-   пластина на уровне пола. Все места, где раньше стояло «flipY*App.SZ», теперь
-   используют эту функцию — иначе масштаб и позиция разъезжались. */
+/* ===== ФИКС v2.1.9 «закрытые кубы ПОД полем, открытые пластины ВИСЯТ НАД НИМ» =====
+   ПРЕДЫСТОРИЯ (почему не работало): в tileTopY(fy)=FLOOR_Y+(tileH(HIDDEN)-tileH(fy))
+   слагалась ПОЛНАЯ высота блока (TILE_HIDDEN=1.0!). Для открытой клетки это
+   FLOOR_Y + h_скрытого - 0.3*h_скрытого = пол ПЛЮС почти полная высота куба —
+   пластины с цифрами улетали высоко над доской, а основания скрытых кубов
+   оказывались глубоко под ними («длинные кубы под полом, по ним можно кликать»).
+   НОВАЯ СХЕМА — ЯМЫ БОЛЬШЕ НЕТ, ВСЁ ЖИВЁТ НАД ПОЛОМ:
+     верх открытой пластины = ровно уровень пола FLOOR_Y (цифра лежит на полу поля);
+     скрытый куб стоит ОСНОВАНИЕМ НА полу и возвышается над ним на полную высоту;
+     анимация открытия опускает КУБ (уменьшает высоту), верх всегда ≤ FLOOR_Y. */
+/* Реальная высота блока в метрах (без анимационного масштаба). */
 function tileH(fy){return fy*App.SZ*TILE_HID;}
+function tileBotY(fy){return fy>=TILE_HIDDEN?0:FLOOR_Y-tileH(fy);} // низ блока: скрытый — на уровне дна плиты(0), открытый — чуть ниже пола
+function tileTopY(fy){return tileBotY(fy)+tileH(fy);}              // верх блока = низ + высота (скрытый: 0+h; открытый: пол)
 /* ФИКС v2.1.8 «кубы ПОД полем, длинные, по ним можно кликать, цифр не видно».
    ПРЕДЫСТОРИЯ ОШИБОК:
    - v2.1.5/6: дно ямы уходило НИЖЕ плиты доски (plate = topOpen-0.225) →
@@ -1267,19 +1274,18 @@ function tileH(fy){return fy*App.SZ*TILE_HID;}
      перепад высот = полная высота блока (в 2 раза выше прежних расчётов).
    Кликать «сквозь» плитки невозможно: ничего не опускается ниже пола, плита
    доски гарантированно под всеми элементами, цифры лежат ровно на полу поля. */
-const FLOOR_Y=0.3;                    // верх плиты-основания доски = уровень пола поля
+const FLOOR_Y=0.3;                    // верх плиты-основания доски = уровень пола поля (плита: y=-0.05..0.3)
 let WELL_K=2.2, WELL_DEPTH=FLOOR_Y;   // WELL_DEPTH теперь = уровень дна «ямы» = пол
 function updateWell(){WELL_DEPTH=FLOOR_Y;}
-function tileTopY(fy){return FLOOR_Y+(tileH(TILE_HIDDEN)-fy*App.SZ*TILE_HID);}
 /* Тёмная рамка-«сетка» вокруг каждой клетки — см. App.outlines в initScene().
-   Квадрат-кольцо чуть больше грани куба лежит НА УРОВНЕ ВЕРХА соседних скрытых
-   блоков: у скрытой клетки рамка видна как тёмный контур у основания куба, а у
-   открытой — как чёткая граница «ямы». Так закрытые клетки всегда различимы,
-   даже когда цвета и высота почти не читаются. */
+   Квадрат-кольцо чуть больше грани куба лежит НА УРОВНЕ ПОЛА соседних клеток:
+   у скрытой клетки рамка видна как тёмный контур на полу вокруг основания
+   куба, у открытой — как граница пластины. Так закрытые клетки всегда
+   различимы, даже когда цвета и высота почти не читаются. */
 function setOutline(id,fy){
   if(!App.outlines)return;
   const p=cellPos(id);
-  _v.set(p.x,tileTopY(fy)+0.004,p.z);
+  _v.set(p.x,FLOOR_Y+0.004,p.z); // ВСЕГДА на уровне пола — рамка не прыгает по высоте кубов
   _e.set(0,0,0);_q.setFromEuler(_e);
   const s=App.SZ*1.07; // >0.92*Sz — ширина видимой рамки ≈0.075*Sz с каждой стороны
   _s.set(s,1,s);
@@ -1356,16 +1362,19 @@ function syncTiles(idsChanged){
        плиткой и была полностью невидима. Теперь метки явно масштабируются
        под размер клетки (0.85*Sz) и поднимаются над её верхней гранью. */
     if(g.state[id]===2){
-      const lift=0.3*App.SZ+0.05;
+      /* ФИКС v2.1.9: метка ставится НА ВЕРХ куба (низ блока = 0, верх = h),
+         раньше высота бралась из старой «ямы» и бомба тонула в кубе. */
+      const lift=tileH(TILE_HIDDEN)+0.05;
       setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
-      setDeco(App.fuses,id,true,lift,new THREE.Color(0xffee00),0.85);
+      setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
       // СТРАХОВКА: если флаг по какой-то причине «потерялся» в state, но
       // метка ещё в списке — рисуем бомбу поверх скрытой клетки в любом случае.
-      setDeco(App.flags,id,true,0.3*App.SZ+0.05,new THREE.Color(0xffd24a),0.85);
-      setDeco(App.fuses,id,true,0.3*App.SZ+0.05,new THREE.Color(0xffee00),0.85);
+      const lift=tileH(TILE_HIDDEN)+0.05;
+      setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
+      setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     }
-    if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-0.42,new THREE.Color(COLORS.cyan),1.05);
+    if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,tileH(TILE_HIDDEN)*0.5,new THREE.Color(COLORS.cyan),1.05);
   }
   finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);
   updateNumbers();
@@ -1464,7 +1473,7 @@ function buildBoard(){
   App.frame.position.y=FLOOR_Y+0.18;App.scene.add(App.frame);
   // камера: цель — середина высоты скрытых блоков НАД полом; иначе кубы
   // дальних рядов уходят за край экрана и поле выглядит пустым сверху.
-  App.target.y=FLOOR_Y+tileH(TILE_HIDDEN)*0.45;
+  App.target.y=tileH(TILE_HIDDEN)*0.5; // центр высоты кубов (кубы стоят НА полу y=0..h)
   App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*TILE_HID*1.15+TILE_HID*App.SZ*2+7);
   applyCamera();
   syncTiles();
