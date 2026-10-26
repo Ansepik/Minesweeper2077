@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:'cybersweep_save_v4', // v4: главная песня — «Лунная соната» (первой в плейлисте); старые настройки треков сброшены
+  key:'cybersweep_save_v5', // v4: главная песня — «Лунная соната» (первой в плейлисте); старые настройки треков сброшены
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1256,7 +1256,14 @@ function tileH(fy){return fy*App.SZ*TILE_HID;}
    0.85 метра от уровня верха скрытых блоков. Раньше открытая плитка лежала
    практически на полу (h≈0.13 м), и при малом App.SZ (крупные поля) перепад
    высот не читался вовсе — поле выглядело как белое пятно без клеток. */
-const WELL_DEPTH=0.85;
+/* ГЛУБИНА ЯМЫ ПРОПОРЦИОНАЛЬНА высоте скрытого блока (0.6 от неё), а не
+   фиксированные 0.85 м. ФИКС «кубы находятся ПОД полем, длинные, и в них
+   можно попасть кликом»: при жёстком WELL_DEPTH=0.85 на маленьких полях
+   (5x5: SZ≈0.85, высота блока ≈2.2 м) верх открытой пластины оказывался
+   ВЫШЕ верха скрытых кубов — кубы уходили вниз под «пол» из открытых
+   клеток и数字-плиток. Теперь верх ямы ВСЕГДА ниже верха куба, а дно
+   плиты/рамка пересчитываются автоматически через tileTopY(TILE_OPEN). */
+const WELL_DEPTH=Math.min(0.9,0.6*tileH(TILE_HIDDEN));
 function tileTopY(fy){return Math.max(0,tileH(TILE_HIDDEN)-fy*App.SZ*TILE_HID+WELL_DEPTH);}
 /* Тёмная рамка-«сетка» вокруг каждой клетки — см. App.outlines в initScene().
    Квадрат-кольцо чуть больше грани куба лежит НА УРОВНЕ ВЕРХА соседних скрытых
