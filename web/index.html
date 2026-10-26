@@ -1206,7 +1206,12 @@ function applyTileAnim(id){
   /* ФИКС v2.1.9: анимация меняет ТОЛЬКО высоту блока; верх открытой клетки
      всегда прижат к полу FLOOR_Y, низ уходит вниз — пластина не «висит». */
   const h=tileH(base)*a.s;
-  _v.set(p.x,FLOOR_Y-0.5*h,p.z);
+  /* ФИКС v2.2.1: анимация меняет только ВЫСОТУ блока; верх клетки при этом
+     плавно опускается от верха куба (FLOOR_Y+STEP_LIFT) к общему верху
+     рельефа tileTopY(TILE_OPEN)=FLOOR_Y+STEP_LIFT — единая плоскость,
+     пластина с цифрой не «висит» и не «тонет». */
+  const top=FLOOR_Y+tileH(TILE_HIDDEN)*a.s;
+  _v.set(p.x,top-0.5*h,p.z);
   _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92*a.s,h,App.SZ*0.92*a.s);
   _m.compose(_v,_q,_s);
   App.tiles.setMatrixAt(id,_m);
@@ -1214,7 +1219,7 @@ function applyTileAnim(id){
 function setDeco(mesh,id,on,lift,color,scl){
   const p=cellPos(id);
   if(on){
-    _v.set(p.x,0.5+(lift||0),p.z);_q.identity();
+    _v.set(p.x,FLOOR_Y+(lift||0),p.z);_q.identity();
     const s=(scl||1)*App.SZ;_s.set(s,s,s);
     _m.compose(_v,_q,_s);mesh.setMatrixAt(mesh._n++, _m);
     if(color!==undefined&&mesh.setColorAt)mesh.setColorAt(mesh._n-1,color);
@@ -1244,7 +1249,16 @@ const cHidden=new THREE.Color(0xdde4ee),cOpen=new THREE.Color(0x141b26),cHot=new
       затемнены directional-светом и контровым светом — блок читается как 3D.
    3) Цифры лежат на дне ямы — гарантированно поверх тёмной пластины. */
 const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // нормированные высоты скрытой / открытой клетки
-const TILE_HID=0.9;                   // множитель реальной высоты скрытого блока (объёмные кубы)
+const FLOOR_Y=0.3;                    // верх плиты-основания доски = уровень пола поля (плита: y=-0.05..0.3)
+const STEP_LIFT=0.2;                  // высота возвышения КЛЕТКИ над сеткой пола
+/* ===== ФИКС v2.2.1 «слишком высокие кубы» + единый рельеф 0.2 =====
+   По требованию игрока И закрытые кубы, И открытые пластины возвышаются
+   над сеткой пола ровно на STEP_LIFT=0.2 м:
+     верх скрытого куба    = FLOOR_Y + 0.2;
+     верх открытой пластины= FLOOR_Y + 0.2 (низ чуть ниже — тонкий блок);
+   перепад высот между ними = 0.2*(TILE_HIDDEN-TILE_OPEN) ≈ 0.176 м —
+   читается как ступенька, но ничего не является «башней». */
+const TILE_HID=STEP_LIFT/FLOOR_Y;     // => реальная высота скрытого блока = 0.2 м
 /* ===== ФИКС v2.1.9 «закрытые кубы ПОД полем, открытые пластины ВИСЯТ НАД НИМ» =====
    ПРЕДЫСТОРИЯ (почему не работало): в tileTopY(fy)=FLOOR_Y+(tileH(HIDDEN)-tileH(fy))
    слагалась ПОЛНАЯ высота блока (TILE_HIDDEN=1.0!). Для открытой клетки это
@@ -1256,9 +1270,17 @@ const TILE_HID=0.9;                   // множитель реальной в�
      скрытый куб стоит ОСНОВАНИЕМ НА полу и возвышается над ним на полную высоту;
      анимация открытия опускает КУБ (уменьшает высоту), верх всегда ≤ FLOOR_Y. */
 /* Реальная высота блока в метрах (без анимационного масштаба). */
-function tileH(fy){return fy*App.SZ*TILE_HID;}
-function tileBotY(fy){return fy>=TILE_HIDDEN?0:FLOOR_Y-tileH(fy);} // низ блока: скрытый — на уровне дна плиты(0), открытый — чуть ниже пола
-function tileTopY(fy){return tileBotY(fy)+tileH(fy);}              // верх блока = низ + высота (скрытый: 0+h; открытый: пол)
+let WELL_K=2.2, WELL_DEPTH=FLOOR_Y;   // WELL_DEPTH теперь = уровень дна «ямы» = пол
+/* ===== ФИКС v2.2.1 «кубы слишком высокие; и открытые, и закрытые должны
+   возвышаться над сеткой на 0.2» — ЕДИНАЯ СХЕМА РОВНОГО РЕЛЬЕФА =====
+     скрытый куб:    низ = FLOOR_Y, верх = FLOOR_Y + STEP_LIFT (=0.2);
+     открытая клетка: та же ВЕРХНЯЯ плоскость FLOOR_Y + STEP_LIFT, но блок
+                      тоньше (низ глубже) — цифра лежит на одной высоте с
+                      верхушками кубов, ничего не висит и не проваливается;
+     анимация открытия опускает верх клетки от уровня куба к общему верху. */
+function tileH(fy){return fy*STEP_LIFT;}                 // реальная высота блока в метрах (скрытый = 0.2)
+function tileTopY(fy){return FLOOR_Y+tileH(TILE_HIDDEN);} // ВСЕ клетки: верх = пол + 0.2 (единая плоскость!)
+function tileBotY(fy){return tileTopY(fy)-tileH(fy);}     // низ блока = верх минус его высота
 /* ФИКС v2.1.8 «кубы ПОД полем, длинные, по ним можно кликать, цифр не видно».
    ПРЕДЫСТОРИЯ ОШИБОК:
    - v2.1.5/6: дно ямы уходило НИЖЕ плиты доски (plate = topOpen-0.225) →
@@ -1274,8 +1296,6 @@ function tileTopY(fy){return tileBotY(fy)+tileH(fy);}              // верх �
      перепад высот = полная высота блока (в 2 раза выше прежних расчётов).
    Кликать «сквозь» плитки невозможно: ничего не опускается ниже пола, плита
    доски гарантированно под всеми элементами, цифры лежат ровно на полу поля. */
-const FLOOR_Y=0.3;                    // верх плиты-основания доски = уровень пола поля (плита: y=-0.05..0.3)
-let WELL_K=2.2, WELL_DEPTH=FLOOR_Y;   // WELL_DEPTH теперь = уровень дна «ямы» = пол
 function updateWell(){WELL_DEPTH=FLOOR_Y;}
 /* Тёмная рамка-«сетка» вокруг каждой клетки — см. App.outlines в initScene().
    Квадрат-кольцо чуть больше грани куба лежит НА УРОВНЕ ПОЛА соседних клеток:
@@ -1315,7 +1335,7 @@ function applyTileEmissive(mat){
   mat.needsUpdate=true;
 }
 function syncTiles(idsChanged){
-  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(0.85,26/(Math.max(App.game.w,App.game.h)*TILE_HID));
+  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(0.85,26/Math.max(App.game.w,App.game.h)); // шаг сетки: фиксирован по размеру поля (высота клеток теперь постоянная STEP_LIFT)
   const g=App.game;
   for(let id=0;id<g.total;id++){
     const st=g.state[id];
@@ -1459,7 +1479,7 @@ function buildBoard(){
   clearNumbers();
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
-  App.SZ=Math.min(0.85,26/(Math.max(g.w,g.h)*TILE_HID));
+  App.SZ=Math.min(0.85,26/Math.max(g.w,g.h)); // шаг сетки фиксирован (высота клеток = STEP_LIFT)
   updateWell(); // уровень пола ямы = верх плиты доски (FLOOR_Y) — см. tileTopY
   // плита: ВЕРХ на уровне FLOOR_Y (пол поля). Раньше позиция считалась от
   // tileTopY(TILE_OPEN)-0.225 и при нулевом WELL_DEPTH плита уезжала вниз,
@@ -1473,8 +1493,8 @@ function buildBoard(){
   App.frame.position.y=FLOOR_Y+0.18;App.scene.add(App.frame);
   // камера: цель — середина высоты скрытых блоков НАД полом; иначе кубы
   // дальних рядов уходят за край экрана и поле выглядит пустым сверху.
-  App.target.y=tileH(TILE_HIDDEN)*0.5; // центр высоты кубов (кубы стоят НА полу y=0..h)
-  App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*TILE_HID*1.15+TILE_HID*App.SZ*2+7);
+  App.target.y=FLOOR_Y+tileH(TILE_HIDDEN)*0.5; // центр объёма клеток (низ FLOOR_Y, верх +0.2)
+  App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*1.3+8);
   applyCamera();
   syncTiles();
 }
