@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:'cybersweep_save_v6', // v6: кубы СТОЯТ НА поле (пол=FLOOR_Y, ямы убраны), Лунная соната главная; главная песня — «Лунная соната» (первой в плейлисте); старые настройки треков сброшены
+  key:'cybersweep_save_v7', // v6: кубы СТОЯТ НА поле (пол=FLOOR_Y, ямы убраны), Лунная соната главная; главная песня — «Лунная соната» (первой в плейлисте); старые настройки треков сброшены
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1023,7 +1023,15 @@ const App={
   tiles:null,flags:null,fuses:null,glows:null,board:null,plate:null,
   numbers:[],particles:null,pGeo:null,pMat:null,
   W:0,H:0,SZ:1,game:null,state:'MENU',
-  camAz:Math.PI*0.75,camEl:1.32,camDist:24,target:{x:0,y:0,z:0},
+  /* v2.4: камера смотрит СТРОГО сверху (camEl→π/2, азимут выровнен по осям
+     сетки — поле всегда развёрнуто «лицом», не боком). target.x/z — панорама
+     (перетаскивание пальцем/мышью), camDist — масштаб «вписать поле в экран». */
+  /* v2.4.1: азимут +π/2 — поле РАЗВЁРНУТО ЛИЦОМ (не боком!). Численная
+     проверка ориентации камеры (top-down): right=(+1,0,0), up≈мировой −Z →
+     экранное «вправо» = мировой +X, «вверх» = мировой −Z. При camAz=-π/2
+     ряды доски шли вертикально («боком»); при +π/2 width-ось поля совпадает
+     с горизонталью экрана. target.x/z — панорама (перетаскивание). */
+  camAz:Math.PI/2,camEl:Math.PI/2-0.001,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1526,7 +1534,9 @@ function buildBoard(){
   // v2.3: плоское поле — все клетки на единой плоскости TOP_ALL,
   // цель камеры — центр тонкой панели (лёгкая перспектива сверху).
   App.target.y=TOP_ALL-0.1;
-  App.camDist=Math.max(10,Math.max(g.w,g.h)*App.SZ*1.3+8);
+  /* v2.4: поле на весь экран — расстояние подбирается так, чтобы доска
+     ЦЕЛИКО вписывалась во вьюпорт (FOV+aspect), с запасом на рамку. */
+  fitCamera();
   applyCamera();
   syncTiles();
 }
@@ -1660,6 +1670,35 @@ function pickCell(ev){
 
 /* Камера: перетаскивание правой кнопкой/фоном/щипок; ЛКМ по плиткам — игра */
 const Cam={drag:false,px:0,py:0,pinch:0};
+/* v2.4: панорама поля (перетаскивание пальцем/мышью в любом месте экрана).
+   target.x/z смещают центр камеры по плоскости поля; границы — размеры доски.
+   Тап без движения остаётся клинком по клетке (порог moved>8). */
+let panMoved=false;
+function clampPan(){
+  const g=App.game;if(!g)return;
+  /* v2.4.1: границы панорамы = сколько поля реально НЕ влезает в кадр.
+     Если доска целиком видна (fitCamera), смещение центра запрещено —
+     поле всегда по центру экрана. */
+  const fov=THREE.MathUtils.degToRad(55),asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
+  const visH=2*Math.tan(fov/2)*App.camDist;          // видимая высота мира
+  const visW=visH*asp;                                // видимая ширина мира
+  const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
+  const hx=Math.max(0,(g.w*App.SZ-visW)/2)+m,hz=Math.max(0,(g.h*App.SZ-visH)/2)+m;
+  App.target.x=Math.max(-hx,Math.min(hx,App.target.x));
+  App.target.z=Math.max(-hz,Math.min(hz,App.target.z));
+}
+function panBy(dx,dy){
+  /* v2.4: камера смотрит строго сверху с азимутом -π/2 → экранное «вправо»
+     = мировой +X? Нет: right-вектор камеры при camAz=-π/2 направлен по -X…
+     проще: dx двигает target по оси X, dy — по оси Z (инвертируем dy, чтобы
+     движение пальцем «вниз» открывалось как прокрутка документа вверх). */
+  const k=App.camDist*0.0016;
+  /* v2.4.1: при camAz=+π/2 right-вектор камеры = (+1,0,0), up ≈ мировой +Z →
+     экранное «вправо» = мировой +X, «вниз» = мировой −Z. Жест «за хват»:
+     тянем вправо — target едет по −X (поле следует за пальцем); вниз — +Z. */
+  App.target.x-=dx*k;App.target.z+=dy*k;
+  clampPan();applyCamera();
+}
 function bindInput(){
   const el=App.renderer.domElement;
   /* ФИКС «меню взрыва и окошко статистики не появляются»: в WebView при
@@ -1674,7 +1713,30 @@ function bindInput(){
   el.addEventListener('pointermove',onMove);
   el.addEventListener('pointerup',onUp);
   el.addEventListener('pointercancel',()=>{Cam.drag=false;clearHold();});
-  el.addEventListener('wheel',e=>{App.camDist=Math.max(6,Math.min(70,App.camDist+e.deltaY*0.02));applyCamera();},{passive:true});
+  /* v2.4: колесо мыши = ЗУМ (приближение/отдаление поля); панорама —
+     перетаскивание пальцем/мышью и стрелки/свайп по пустому месту. */
+  el.addEventListener('wheel',e=>{
+    App.camDist=Math.max(6,Math.min(120,App.camDist+e.deltaY*0.03));applyCamera();
+  },{passive:true});
+  /* Панорама мышью: тянем зажатой ЛКМ в любом месте (если движение > порога —
+     это drag, а не тап; onUp проверяет Cam.moved/wasDrag как раньше). */
+  addEventListener('pointermove',e=>{
+    if(Cam.drag&&e.buttons){
+      const dx=e.clientX-Cam.px,dy=e.clientY-Cam.py;
+      Cam.px=e.clientX;Cam.py=e.clientY;
+      Cam.moved+=Math.abs(dx)+Math.abs(dy);
+      if(Cam.moved>8){clearHold();panMoved=true;panBy(dx,dy);}
+    }
+  });
+  addEventListener('touchmove',e=>{
+    if(e.touches.length===1&&Cam.drag){
+      const t=e.touches[0];
+      const dx=t.clientX-Cam.px,dy=t.clientY-Cam.py;
+      Cam.px=t.clientX;Cam.py=t.clientY;
+      Cam.moved+=Math.abs(dx)+Math.abs(dy);
+      if(Cam.moved>8){clearHold();panMoved=true;panBy(dx,dy);}
+    }
+  },{passive:true});
 }
 let holdTimer=null,holdTarget=-1,longFired=false,doubleTapTimer=null;
 function clearHold(){if(holdTimer){clearTimeout(holdTimer);holdTimer=null;}if(App.peekIds){App.peekIds=null;syncTiles();}}
@@ -1691,12 +1753,13 @@ function onDown(e){
     Cam.drag=false;holdTarget=id;return;
   }
   Cam.px=e.clientX;Cam.py=e.clientY;
+  panMoved=false; // v2.4: каждый новый жест — панорама ещё не двигалась
   /* ФИКС «после жеста масштабирования пальцем следующее касание клетки
      игнорировалось»: touchmove щипка сбрасывал Cam.drag, но НЕ обнулял
      накопленный Cam.moved — onUp считал тап «перетаскиванием» и молча
      возвращался. Сбрасываем счётчик движения при каждом новом касании. */
   if(e.pointerType==='touch')Cam.moved=0;
-  if(id<0){Cam.drag=true;Cam.moved=0;return;} // промах по доске — вращение
+  if(id<0){Cam.drag=true;Cam.moved=0;return;} // промах по доске — панорама (v2.4)
   Cam.drag=true;Cam.moved=0;Cam.downId=id;Cam.downBtn=0;
   // Долгое нажатие: разведка на числе / флаг на скрытой
   holdTarget=id;
@@ -1709,12 +1772,8 @@ function onDown(e){
 }
 function onMove(e){
   if(!Cam.drag)return;
-  const dx=e.clientX-Cam.px,dy=e.clientY-Cam.py;
-  Cam.px=e.clientX;Cam.py=e.clientY;
-  Cam.moved+=Math.abs(dx)+Math.abs(dy);
-  if(Cam.moved>8){clearHold();}
-  /* v2.3: уход от 3D-темы — поле статично сверху, вращение камеры отключено
-     (остался только зум колесом/щипком в onWheel/onPinch). */
+  /* v2.4: панорама обрабатывается глобальными слушателями (bindInput) —
+     здесь только накопление смещения для различения тапа/драга. */
 }
 function onUp(e){
   const wasDrag=Cam.moved>8;
@@ -1731,7 +1790,7 @@ function onUp(e){
   }
   if(e.button!==0)return;
   clearHold();
-  if(longFired||wasDrag)return;
+  if(longFired||wasDrag){panMoved=false;return;} // v2.4: drag = панорама, не тап
   const id=pickCell(e);
   if(id<0||!App.game)return;
   const g=App.game;
@@ -2222,7 +2281,17 @@ function perspBase(){return new THREE.PerspectiveCamera(55,innerWidth/innerHeigh
 function makePersp(){
   const c=perspBase();
   c.position.copy(App.camera.position);c.quaternion.copy(App.camera.quaternion);
-  App.camEl=Math.max(App.camEl,0.5);applyCameraTo(c);return c;
+  applyCameraTo(c);return c;
+}
+/* v2.4: подбор camDist — поле ЦЕЛИКО вписывается во вьюпорт при взгляде
+   строго сверху (FOV по меньшей из осей экрана). Вызывается из buildBoard. */
+function fitCamera(){
+  const g=App.game;if(!g)return;
+  const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // габариты доски с рамкой
+  const fov=THREE.MathUtils.degToRad(55),asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
+  const needY=bh/2/Math.tan(fov/2);          // дистанция, чтобы доска влезла по высоте
+  const needX=bw/2/(Math.tan(fov/2)*asp);    // ...и по ширине
+  App.camDist=Math.max(8,Math.max(needY,needX)*1.08);
 }
 function makeOrtho(){
   const d=Math.max(6,App.camDist*0.62);
@@ -2237,15 +2306,15 @@ function applyCamera(){
        чтобы вид оставался статичным сверху и не прыгал в изометрию 45°. */
     applyCameraTo(App.camera);
     App.camera.lookAt(App.target.x,App.target.y,App.target.z);
-    const d=Math.max(6,dist*0.62),asp=innerWidth/innerHeight;
-    App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
+    const dd=Math.max(6,App.camDist*0.62),asp=innerWidth/innerHeight;
+    App.camera.left=-dd*asp;App.camera.right=dd*asp;App.camera.top=dd;App.camera.bottom=-dd;
     App.camera.updateProjectionMatrix();
   }else{
     applyCameraTo(App.camera);
   }
 }
 function applyCameraTo(cam){
-  const el=Math.max(0.45,App.camEl);
+  const el=Math.min(App.camEl,Math.PI/2-0.001); // v2.4: строго сверху, без перелёта через зенит
   cam.position.set(
     App.target.x+App.camDist*Math.sin(el)*Math.cos(App.camAz),
     App.target.y+App.camDist*Math.cos(el),

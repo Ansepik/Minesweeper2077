@@ -1,4 +1,4 @@
-build_tmp/
 *.apk
 !LastVersion/*.apk
-*.idsig
+build_tmp/
+build/
