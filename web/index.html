@@ -261,7 +261,7 @@ body.shake #scene{animation:shk .45s linear}
       <label class="chk"><input type="checkbox" data-track="moonlight"> Бетховен — Лунная соната</label>
       <label class="chk"><input type="checkbox" data-track="tori"> Lia — Tori no Uta (вокал, Air OP)</label>
       <label class="chk"><input type="checkbox" data-track="mozart"> Моцарт — Свадьба Фигаро, увертюра</label>
-      <label class="chk"><input type="checkbox" data-track="vchno17"> Pyrokinesis — Вечно 17</label>
+      <label class="chk"><input type="checkbox" data-track="rucksack"> Рэйди — Рюкзак</label>
     </div>
     <div class="row">
       <button class="btn" id="btnQuality">Качество: ВЫСОКОЕ</button>
@@ -878,7 +878,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
 /* ================= [4] НАСТРОЙКИ И СОХРАНЕНИЯ ================= */
 const Store={
   key:'cybersweep_save_v2', // v2: кампания пересобрана — 100 секторов
-  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,vchno17:true}}};},
+  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
       const raw=localStorage.getItem(this.key);
@@ -939,10 +939,10 @@ const TRACKS=[ // id -> файл и название (порядок = поря�
   {id:'moonlight',file:'music/moonlight.ogg',name:'Бетховен — Лунная соната'},
   {id:'tori',file:'music/tori_no_uta.ogg',name:'Lia — Tori no Uta (вокал, Air OP)'},
   {id:'mozart',file:'music/mozart.ogg',name:'Моцарт — Свадьба Фигаро'},
-  {id:'vchno17',file:'music/vchno17.ogg',name:'Pyrokinesis — Вечно 17'}
+  {id:'rucksack',file:'music/rucksack.ogg',name:'Рэйди — Рюкзак'}
 ];
 function enabledTracks(){ // список треков, отмеченных галочками (в порядке TRACKS)
-  const t=(S&&S.tracks)||{moonlight:true,tori:true,mozart:true,vchno17:true};
+  const t=(S&&S.tracks)||{moonlight:true,tori:true,mozart:true,rucksack:true};
   return TRACKS.filter(x=>t[x.id]!==false);
 }
 function setMusicVol(v){ // плавная громкость напрямую у элемента
@@ -1048,6 +1048,10 @@ function initScene(){
   const dl=new THREE.DirectionalLight(0xbfefff,0.75);dl.position.set(6,14,8);App.scene.add(dl);
   const l1=new THREE.PointLight(COLORS.cyan,0.8,40);l1.position.set(-8,6,-6);App.scene.add(l1);
   const l2=new THREE.PointLight(COLORS.magenta,0.7,40);l2.position.set(8,5,6);App.scene.add(l2);
+  /* ОБЪЁМ: контровый тёплый свет сзади-снизу — боковые грани белых кубов
+     затемняются относительно верхней грани, и «степеньки» между скрытыми/
+     открытыми клетками читаются как реальный 3D-рельеф даже на мелких полях. */
+  const l3=new THREE.DirectionalLight(0xffc978,0.35);l3.position.set(-7,3,-9);App.scene.add(l3);
 
   // Пыль города (фон)
   const dn=350,pos=new Float32Array(dn*3);
@@ -1156,7 +1160,22 @@ function setDeco(mesh,id,on,lift,color,scl){
    читался. Теперь скрытая плитка — ярко-белая, открытая — глубокий графит
    (#141b26): контраст считывается мгновенно, а светлые неоновые цифры на
    тёмном фоне читаются намного лучше. */
-const cHidden=new THREE.Color(0xffffff),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xbdf6ff),cDead=new THREE.Color(0x2a0d12);
+const cHidden=new THREE.Color(0xf2f5fa),cOpen=new THREE.Color(0x141b26),cHot=new THREE.Color(0xbdf6ff),cDead=new THREE.Color(0x2a0d12);
+/* --- ОБЪЁМ КЛЕТОК (фикс «поле выглядит пустым / всё как будто открыто»):
+   1) Плитки были одинаковой высоты: скрытая fy=1 и открытая 0.16 при шаге
+      клетки App.SZ — на больших полях куб скрытой клетки ~0.1 м, перепад
+      высот нечитаем, поле кажется плоским «пустым». Теперь скрытая клетка —
+      полноценный объёмный блок (выше основания), открытая — тонкая пластина:
+      рельеф виден даже с большого расстояния.
+   2) ЧИСТЫЙ БЕЛЫЙ (0xffffff) в r128 без sRGB-конверсии конвертировался в
+      линейное пространство и после кодирования выводился пересвеченным —
+      верхняя грань сливалась с неоном подсветок, грани различались плохо.
+      Скрытый цвет теперь слегка холодный (#f2f5fa) — остаётся белым для
+      глаза, но не выбит.
+   3) Цифровые накладки раньше красились в тот же цвет, что и плитка, —
+      визуально это выглядело как «открытая пустая клетка». Накладка теперь
+      тёмная графитовая с неоновой рамкой: цифра читается мгновенно. */
+const TILE_HIDDEN=1.0,TILE_OPEN=0.12; // высоты скрытой / открытой клетки (в единицах flipY)
 /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА» (ГЛАВНАЯ причина): раньше этот блок стоял
    ПОСЛЕ объявления const _m=new THREE.Matrix4() и обращался к App.tileMat,
    который создаётся только внутри initScene(). В момент разбора скрипта
@@ -1174,22 +1193,22 @@ function applyTileEmissive(mat){
   mat.needsUpdate=true;
 }
 function syncTiles(idsChanged){
-  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(1,26/Math.max(App.game.w,App.game.h));
+  App.W=App.game.w;App.hFix=App.game.h;App.SZ=Math.min(0.85,26/Math.max(App.game.w,App.game.h));
   const g=App.game;
   for(let id=0;id<g.total;id++){
     const st=g.state[id];
     let col,fy;
-    if(st===1){col=cOpen;fy=0.16;}
+    if(st===1){col=cOpen;fy=TILE_OPEN;}
     else{
       /* ФИКС «плитки не прожимаются»: если клетка открыта (st===1), она ВСЕГДА
          опускается и красится в cOpen — независимо от анимаций GSAP. Ветка ниже
          касается только скрытых/флаговых клеток. */
       const hot=App.peekIds&&App.peekIds.includes(id);
-      col=hot?cHot:cHidden;fy=1;
+      col=hot?cHot:cHidden;fy=TILE_HIDDEN;
     }
     /* ПОРАЖЕНИЕ: все мины подсвечиваются ТЁМНО-МАЛИНОВЫМ и остаются ПОВЫШЕННЫМИ
        (не «открытыми»): игрок сразу видит, где были бомбы. Взорвавшаяся — ядовито-алая. */
-    if(g.dead&&g.grid[id]===-1){if(st!==2)col=g.exploded===id?new THREE.Color(0xff2d55):new THREE.Color(0x50121c);fy=1;}
+    if(g.dead&&g.grid[id]===-1){if(st!==2)col=g.exploded===id?new THREE.Color(0xff2d55):new THREE.Color(0x50121c);fy=TILE_HIDDEN;}
     /* ФИКС «цифры не появляются после аккорда»: та же причина, что и с
        невидимыми бомбами — сетка цифр-накладок рисовалась на плоскости
        РАЗМЕРОМ 1 МЕТР, а клетки на больших полях ~0.1–0.4 м; накладка
@@ -1251,13 +1270,17 @@ function finishInst(mesh){
    над основной плиткой — запаяно видима всегда, пока клетка открыта. */
 const NUM_COLORS=['#00f3ff','#3dff8a','#ffee00','#ff9d00','#ff00ff','#7df9ff','#ffffff','#ff2d55'];
 const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas на каждую цифру!)
+/* НОВЫЙ ВИД ЦИФР (фикс «как будто открыто, но цифры нет»): раньше фон
+   накладки был цвета самой плитки (#141b26) — цифра визуально «сливалась»
+   с открытой клеткой и поле казалось пустым. Теперь накладка — тёмная
+   графитовая плашка с неоновой рамкой: цифра читается мгновенно. */
 function makeFaceTex(n){
   const key='n'+n;
   if(faceCache[key])return faceCache[key];
   const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
   const x=cv.getContext('2d');
-  x.fillStyle='#'+cOpen.getHexString();x.fillRect(0,0,S2,S2);        // фон = цвет плитки
-  x.strokeStyle='rgba(0,243,255,0.30)';x.lineWidth=4;x.strokeRect(6,6,S2-12,S2-12); // неоновая рамка
+  x.fillStyle='#0a0e16';x.fillRect(0,0,S2,S2);                       // глубокий графит (темнее плитки)
+  x.strokeStyle='rgba(0,243,255,0.55)';x.lineWidth=4;x.strokeRect(6,6,S2-12,S2-12); // неоновая рамка
   const col=NUM_COLORS[n-1]||'#ffffff';
   x.font='900 84px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle';
   x.shadowColor=col;x.shadowBlur=16;
@@ -1295,7 +1318,9 @@ function updateNumbers(){
       const m=new THREE.MeshBasicMaterial({map:makeFaceTex(v),toneMapped:false}); // НЕ прозрачный — видно всегда
       const sp=new THREE.Mesh(numGeometry,m);
       const p=cellPos(id);
-      sp.position.set(p.x,0.16*App.SZ+0.03,p.z); // выше верхней грани плитки (0.16*Sz) с запасом
+      /* Накладка лежит НА тонкой пластине открытой клетки (TILE_OPEN*Sz —
+         верхняя грань), с небольшим запасом против z-fighting. */
+      sp.position.set(p.x,TILE_OPEN*App.SZ+0.02,p.z);
       sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
       sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
@@ -1308,7 +1333,7 @@ function buildBoard(){
   clearNumbers();
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
-  App.SZ=Math.min(1,26/Math.max(g.w,g.h));
+  App.SZ=Math.min(0.85,26/Math.max(g.w,g.h));
   // плита
   App.plate.scale.set((g.w+1.6)*App.SZ,0.35,(g.h+1.6)*App.SZ);
   App.plate.position.set(0,-0.2,0);
@@ -1340,9 +1365,9 @@ const T={
        в открытый цвет СРАЗУ при постановке state=1 (см. reveal/doReveal) и
        перекрашивается на КАЖДОМ кадре анимации — цифра видна непрерывно. */
     const upd=()=>{setTile(id,o.y,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;};
-    const done=()=>{setTile(id,0.16,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;updateNumbers();};
-    if(window.gsap)gsap.to(o,{y:0.16,duration:0.42,delay,ease:'back.out(1.7)',onUpdate:upd,onComplete:done});
-    else{o.y=0.16;upd();done();}
+    const done=()=>{setTile(id,TILE_OPEN,1,cOpen);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;updateNumbers();};
+    if(window.gsap)gsap.to(o,{y:TILE_OPEN,duration:0.42,delay,ease:'back.out(1.7)',onUpdate:upd,onComplete:done});
+    else{o.y=TILE_OPEN;upd();done();}
   },
   popFlag(id,delay){
     if(window.gsap&&App.flags)gsap.fromTo({s:0},{s:1,duration:0.4,delay,ease:'back.out(2.5)',onUpdate:()=>syncTiles()},{immediateRender:false});
@@ -1562,7 +1587,7 @@ function tryChord(id){
   for(const f of (g._chordFlags||[])){if(App.bombMarks)App.bombMarks.add(f);}
   /* ФИКС «после аккорда цифры не появляются»: сразу же, не дожидаясь твинов,
      опускаем и перекрашиваем ВСЕ открытые клетки и обновляем GPU-атрибуты. */
-  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,TILE_OPEN,1,cOpen);
   App.tiles.instanceMatrix.needsUpdate=true;
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   SFX.chord();animateRevealed(id);refreshHud();checkVictory();
@@ -1580,7 +1605,7 @@ function doReveal(id){
   /* ФИКС «плитки не прожимаются / цифра не появляется»: как только клетка
      открыта (state=1), СРАЗУ красим ВСЕ открытые клетки в явный открытый
      цвет и обновляем GPU-атрибуты — не дожидаясь окончания GSAP-твина. */
-  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,0.16,1,cOpen);
+  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,TILE_OPEN,1,cOpen);
   App.tiles.instanceMatrix.needsUpdate=true;
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   animateRevealed(id);
@@ -1598,7 +1623,7 @@ function animateRevealed(fromId){
   // или запись в instanceColor «потерялась» в WebView.
   clearTimeout(animateRevealed._t);
   animateRevealed._t=setTimeout(()=>{
-    for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,0.16,1,cOpen);
+    for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,TILE_OPEN,1,cOpen);
     App.tiles.instanceMatrix.needsUpdate=true;
     if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
     syncTiles();
@@ -1619,7 +1644,7 @@ function pulseTile(id){
   if(!window.gsap)return;
   const o={k:0};
   gsap.to(o,{k:1,duration:0.3,onComplete:()=>syncTiles(),onUpdate:()=>{
-    const c=o.k>0.5?new THREE.Color(0x50121c):cHidden;setTile(id,1,1,c);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
+    const c=o.k>0.5?new THREE.Color(0x50121c):cHidden;setTile(id,TILE_HIDDEN,1,c);App.tiles.instanceMatrix.needsUpdate=true;if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   }});
 }
 
@@ -1970,7 +1995,7 @@ function updateSettingsUI(){
   $('btnQuality').textContent='Качество: '+(S.quality?'ВЫСОКОЕ':'НИЗКОЕ');
   $('btnCam').textContent='Камера: '+(S.perspective?'ПЕРСПЕКТИВА':'ИЗОМЕТРИЯ');
   // синхронизируем галочки треков с сохранёнными настройками
-  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,vchno17:true};
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,rucksack:true};
   document.querySelectorAll('#musicTracks input[data-track]').forEach(cb=>{
     cb.checked=S.tracks[cb.dataset.track]!==false;});
 }
@@ -1978,7 +2003,7 @@ function updateSettingsUI(){
 document.addEventListener('change',e=>{
   const cb=e.target.closest&&e.target.closest('#musicTracks input[data-track]');
   if(!cb)return;
-  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,vchno17:true};
+  if(!S.tracks)S.tracks={moonlight:true,tori:true,mozart:true,rucksack:true};
   S.tracks[cb.dataset.track]=cb.checked;Store.save();
   MUSIC.orderKey=null; // заставим musicStart пересобрать плейлист
   if(S.music){MUSIC.tried=false;MUSIC.fileOk=false;musicStart();}
