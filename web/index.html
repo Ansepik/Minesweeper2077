@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v12", // v12: v3.2 — исправлена арифметика lookAt; camAz=+pi/2, X=столбцы, Z=строки — поле развёрнуто, вид ровно сверху
+  key:"cybersweep_save_v13", // v12: v3.2 — исправлена арифметика lookAt; camAz=+pi/2, X=столбцы, Z=строки — поле развёрнуто, вид ровно сверху
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1044,6 +1044,14 @@ const App={
   /* v3.2: camAz=+π/2 => eye=(-D·sin? нет): cos(π/2)=0, sin(π/2)=1 → eye=(0,Y,+D),
      камера СНАДИ (+Z) смотрит на -Z: screen-right=+X (столбцы слева направо),
      screen-up=-Z (row0 сверху). ЧИСЛЕННО ПРОВЕРЕНО точной формулой lookAt r128. */
+  /* v3.3 ФИНАЛЬНЫЙ фикс «вида сбоку» (корень найден численно, node-расчёт lookAt r128):
+     eye = target + D·(sin el·cos az, cos el, sin el·sin az); при az=+π/2 eye=(0,Y,+D),
+     forward=(0,~−1,−1) НЕ вырожден; right=cross(up_world,forward_norm)=(+1,0,0) —
+     экранное «вправо» = мировой +X = СТОЛБЦЫ (слева направо); up≈(0,1,−ε) → screen-up=−Z =
+     row0 СВЕРХУ. В v3.2 азимут стоял верно, но fitCamera инвертировал dd через camDist*0.62
+     и обрезал camDist потолком 60 — поле не влезало в орто-окно и уезжало за край экрана,
+     из-за чего визуально оставался «бок поля». Теперь camDist считается ПРЯМО как dd (без
+     0.62 и без потолка), доска гарантированно целиком в кадре по центру. */
   camAz:Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
@@ -1720,7 +1728,7 @@ function clampPan(){
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
   /* v2.9: камера ОРТОГРАФИЧЕСКАЯ по умолчанию — видимая зона = dd×dd*asp
      (dd=max(6,camDist*0.62)), а не перспективный tan(fov). */
-  const dd=Math.max(6,App.camDist*0.62);
+  const dd=Math.max(6,App.camDist);
   const visH=2*dd, visW=2*dd*asp;
   /* v2.7: при наклоне камеры мировая глубина Z проецируется на экранную
      вертикаль с множителем cos(el) — поле «умещается» раньше, граница
@@ -1765,7 +1773,7 @@ function bindInput(){
     /* v2.8: зум орто-камеры = изменение размера видимой зоны (dd=camDist*0.62),
        а НЕ высоты камеры: раньше camDist улетал до 120, dd≈74 м — поле
      становилось крошечным, закрытые кубы (0.2 м) сливались с плитой. */
-    App.camDist=Math.max(6,Math.min(App.camDist*(e.deltaY>0?1.08:0.93),58));applyCamera();
+    App.camDist=Math.max(4,App.camDist*(e.deltaY>0?1.08:0.93));applyCamera();
   },{passive:true});
   /* Панорама мышью: тянем зажатой ЛКМ в любом месте (если движение > порога —
      это drag, а не тап; onUp проверяет Cam.moved/wasDrag как раньше). */
@@ -1869,7 +1877,7 @@ addEventListener('touchmove',e=>{
     const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
     /* v2.8: щипок — множительный зум орто-окна (не линейная подстройка
        высоты камеры): 70 → 58 максимум, чтобы поле не «улетало» от камеры. */
-    App.camDist=Math.max(6,Math.min(58,App.camDist*(1-(d-pinchD)*0.004)));pinchD=d;applyCamera();
+    App.camDist=Math.max(4,App.camDist*(1-(d-pinchD)*0.004));pinchD=d;applyCamera();
   }
 },{passive:true});
 
@@ -2367,10 +2375,10 @@ function fitCamera(){
   const sq=cosEl<0.2?1:cosEl;                    // flat-вид: без сжатия по вертикали
   /* v3.0: экранная горизонталь = поле по ширине (bw), вертикаль = по высоте (bh). */
   const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны (по вертикали)
-  App.camDist=Math.min(Math.max(dd/0.62,8),60);  // инверсия 0.62 + потолок от «улёта» камеры
+  App.camDist=Math.max(dd,8);  // v3.3: camDist == dd напрямую (без инверсии 0.62 и потолка)
 }
 function makeOrtho(){
-  const d=Math.max(6,App.camDist*0.62);
+  const d=Math.max(6,App.camDist);
   const asp=innerWidth/innerHeight;
   const c=new THREE.OrthographicCamera(-d*asp,d*asp,d,-d,0.1,300);
   c.position.copy(App.camera.position);c.lookAt(App.target.x,App.target.y,App.target.z);
@@ -2382,7 +2390,7 @@ function applyCamera(){
        чтобы вид оставался статичным сверху и не прыгал в изометрию 45°. */
     applyCameraTo(App.camera);
     App.camera.lookAt(App.target.x,App.target.y,App.target.z);
-    const dd=Math.max(6,App.camDist*0.62),asp=innerWidth/innerHeight;
+    const dd=Math.max(6,App.camDist),asp=innerWidth/innerHeight;
     App.camera.left=-dd*asp;App.camera.right=dd*asp;App.camera.top=dd;App.camera.bottom=-dd;
     App.camera.updateProjectionMatrix();
   }else{
@@ -2403,7 +2411,7 @@ function layout(){
   if(!App.renderer)return;
   App.renderer.setSize(W,H);
   if(App.camera.isOrthographicCamera){
-    const d=Math.max(6,App.camDist*0.62),asp=W/H;
+    const d=Math.max(6,App.camDist),asp=W/H;
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
     App.camera.updateProjectionMatrix();
   }else{App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
