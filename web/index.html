@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v9", // v9: строгий вид СВЕРХУ (орто, без наклона) — сброс старых настроек камеры (v2.8)
+  key:"cybersweep_save_v10", // v10: v2.9 — исправлена ориентация поля (right=+X) и границы панорамы под орто-камеру
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1037,6 +1037,10 @@ const App={
   /* v2.8: camEl=π/2-0.03 — вид ПРЯМО ровно сверху (почти ортопроекция без
      наклона; небольшой зазор от зенита нужен, чтобы lookAt с up=(0,1,0)
      не был вырожден). camAz=-π/2: screen-right=+X (столбцы слева направо). */
+  /* v2.9: ориентация камеры ВЫВЕДЕНА ВЕКТОРАНО (node-проверка lookAt-базиса):
+     camAz=-π/2 → right=(+1,0,0)=мировой +X (столбцы поля слева направо),
+     up_cam≈(0,1,-0.03) → мировой −Z наверху (row 0 сверху). Поле развёрнуто
+     лицом, как в классическом сапёре, при взгляде СТРОГО сверху. */
   camAz:-Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
@@ -1706,13 +1710,15 @@ function clampPan(){
      Если доска целиком видна (fitCamera), смещение центра запрещено —
      поле всегда по центру экрана. Оси мира: X = ширина поля (screen-right при
      camAz=+π/2), Z = глубина (экранная вертикаль) — см. v2.7. */
-  const fov=THREE.MathUtils.degToRad(55),asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
-  const visH=2*Math.tan(fov/2)*App.camDist;          // видимая высота мира
-  const visW=visH*asp;                                // видимая ширина мира
+  const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
+  /* v2.9: камера ОРТОГРАФИЧЕСКАЯ по умолчанию — видимая зона = dd×dd*asp
+     (dd=max(6,camDist*0.62)), а не перспективный tan(fov). */
+  const dd=Math.max(6,App.camDist*0.62);
+  const visH=2*dd, visW=2*dd*asp;
   /* v2.7: при наклоне камеры мировая глубина Z проецируется на экранную
      вертикаль с множителем cos(el) — поле «умещается» раньше, граница
      панорамы считается по ПРОЕКЦИИ глубины, а не по чистой h*Sz. */
-  const sq=Math.max(0.4,Math.cos(Math.min(App.camEl,Math.PI/2-0.001)));
+  const sq=Math.max(0.4,Math.sin(Math.min(App.camEl,Math.PI/2-0.001)));
   const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
   const hx=Math.max(0,(g.w*App.SZ-visW)/2)+m,hz=Math.max(0,(g.h*App.SZ*sq-visH)/2)+m;
   App.target.x=Math.max(-hx,Math.min(hx,App.target.x));
@@ -1727,7 +1733,7 @@ function panBy(dx,dy){
   /* v2.7: при camAz=-π/2 right-вектор камеры = (+1,0,0) (экранное «вправо» =
      мировой +X), up ≈ мировой −Z (экранное «вниз» = мировой +Z). Жест «за хват»:
      тянем вправо — поле следует за пальцем (target по −X); вниз — target по +Z. */
-  App.target.x-=dx*k;App.target.z+=dy*k;
+  App.target.x-=dx*k;App.target.z-=dy*k;
   clampPan();applyCamera();
 }
 function bindInput(){
