@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v8", // v8: плоское поле + правильная ориентация камеры (v2.7)
+  key:"cybersweep_save_v9", // v9: строгий вид СВЕРХУ (орто, без наклона) — сброс старых настроек камеры (v2.8)
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1034,7 +1034,10 @@ const App={
      столбцы/строки совпадают с HUD и логикой сапёра. Наклон el=1.05 рад
      (~60° от горизонта): вид СВЕРХУ с лёгкой перспективой — грани кубов
      barely заметны (объём есть, но это не изометрия). */
-  camAz:-Math.PI/2,camEl:1.05,camDist:24,target:{x:0,y:0,z:0},
+  /* v2.8: camEl=π/2-0.03 — вид ПРЯМО ровно сверху (почти ортопроекция без
+     наклона; небольшой зазор от зенита нужен, чтобы lookAt с up=(0,1,0)
+     не был вырожден). camAz=-π/2: screen-right=+X (столбцы слева направо). */
+  camAz:-Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1074,8 +1077,13 @@ function initScene(){
      Включено честное затухание physical decay + ambient поднят, чтобы картинка
      держалась на диффузе, а не на выжигающих точечных светах. */
   App.renderer.useLegacyLights=false; // физическое затухание точечных источников
+  /* v2.8: вид СТРОГО ровно сверху — камера почти над центром поля, поэтому
+     наклонный DirectionalLight (6,14,8) освещал верхние грани кубов под косым
+     углом и они выглядели темнее плиты. Свет переведён в ЗЕНИТ (прямо над
+     полем): верхние грани закрытых кубов и пластины открытых получают ровно
+     одинаковое освещение, разница читается только по цвету (индиго/графит). */
   App.scene.add(new THREE.AmbientLight(0x3d5260,1.35)); // ровный заполняющий свет
-  const dl=new THREE.DirectionalLight(0xbfefff,1.15);dl.position.set(6,14,8);App.scene.add(dl);
+  const dl=new THREE.DirectionalLight(0xbfefff,1.15);dl.position.set(0.5,20,0.6);App.scene.add(dl);
   /* Точечные неоны отведены ВЫСОКО (y≈9) и далеко от центра поля — раньше они
      висели прямо над плитками и выбеливали верхние грани скрытых кубов. */
   const l1=new THREE.PointLight(COLORS.cyan,14,60,2);l1.position.set(-14,9,-12);App.scene.add(l1);
@@ -1739,7 +1747,10 @@ function bindInput(){
   /* v2.4: колесо мыши = ЗУМ (приближение/отдаление поля); панорама —
      перетаскивание пальцем/мышью и стрелки/свайп по пустому месту. */
   el.addEventListener('wheel',e=>{
-    App.camDist=Math.max(6,Math.min(120,App.camDist+e.deltaY*0.03));applyCamera();
+    /* v2.8: зум орто-камеры = изменение размера видимой зоны (dd=camDist*0.62),
+       а НЕ высоты камеры: раньше camDist улетал до 120, dd≈74 м — поле
+     становилось крошечным, закрытые кубы (0.2 м) сливались с плитой. */
+    App.camDist=Math.max(6,Math.min(App.camDist*(e.deltaY>0?1.08:0.93),58));applyCamera();
   },{passive:true});
   /* Панорама мышью: тянем зажатой ЛКМ в любом месте (если движение > порога —
      это drag, а не тап; onUp проверяет Cam.moved/wasDrag как раньше). */
@@ -1841,7 +1852,9 @@ addEventListener('touchstart',e=>{if(e.touches.length===2){pinchD=Math.hypot(e.t
 addEventListener('touchmove',e=>{
   if(e.touches.length===2){
     const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
-    App.camDist=Math.max(6,Math.min(70,App.camDist-(d-pinchD)*0.05));pinchD=d;applyCamera();
+    /* v2.8: щипок — множительный зум орто-окна (не линейная подстройка
+       высоты камеры): 70 → 58 максимум, чтобы поле не «улетало» от камеры. */
+    App.camDist=Math.max(6,Math.min(58,App.camDist*(1-(d-pinchD)*0.004)));pinchD=d;applyCamera();
   }
 },{passive:true});
 
@@ -2293,6 +2306,14 @@ document.addEventListener('change',e=>{
   if(S.music){MUSIC.tried=false;MUSIC.fileOk=false;musicStart();}
 });
 let orthoCam=null;
+/* v2.8: ПЛОСКИЙ ВИД СВЕРХУ ПО УМОЛЧАНИЮ — жёстко, независимо от старого
+   значения S.perspective в localStorage/сохранениях (там мог остаться true,
+   и перспективная камера давала «наклон» поля). Перспектива остаётся
+   доступной только вручную через кнопку «Камера». */
+function applyProjectionDefault(){
+  S.perspective=false;
+  if(App.camera&&App.camera.isPerspectiveCamera)App.camera=makeOrtho();
+}
 function toggleProjection(){
   if(S.perspective){
     App.camera=makePersp();
@@ -2316,12 +2337,18 @@ function fitCamera(){
   const g=App.game;if(!g)return;
   const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // габариты доски с рамкой (X,Z)
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.2);
-  /* Проекция глубины Z на экранную вертикаль при наклоне el: множитель
-     cos(el)=0.50 при el=1.05 рад. По вертикали доска «короче» мировой
-     глубины — учитываем это, иначе поле не влезало бы и уезжало за край. */
-  const sq=Math.max(0.4,Math.cos(Math.min(App.camEl,Math.PI/2-0.001)));
+  /* v2.8: при взгляде СТРОГО сверху (camEl≈π/2) cos(el)→0 и глубина поля
+     проецировалась в ноль — dd схлопывался до минимума 6 м, орто-окно
+     становилось ОГРОМНЫМ (dd=camDist*0.62≈174), клетки сжимались в точки, а
+     закрытые кубы (высота 0.2 м) с высоты ~280 м оказывались НИЖЕ near-плоскости
+     орто-камеры (near=0.1) и отсекались — «на поле пропали все закрытые
+     клетки». Теперь при flat-виде множитель проекции = 1 (доска занимает
+     экран по вертикали СВОЕЙ реальной глубиной), camDist ограничен сверху,
+     а нижняя граница dd гарантированно покрывает доску. */
+  const cosEl=Math.cos(Math.min(App.camEl,Math.PI/2-0.001));
+  const sq=cosEl<0.2?1:cosEl;                    // flat-вид: без сжатия по вертикали
   const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны
-  App.camDist=Math.max(dd/0.62,8);               // инверсия множителя 0.62 из makeOrtho/layout
+  App.camDist=Math.min(Math.max(dd/0.62,8),60);  // инверсия 0.62 + потолок от «улёта» камеры
 }
 function makeOrtho(){
   const d=Math.max(6,App.camDist*0.62);
@@ -2385,7 +2412,7 @@ function boot(ok3d){
       '<span style="font-size:12px;color:#8fb8c8">Если вы открыли файл офлайн — скачайте библиотеки или подключитесь к сети.</span></div>';
     return;
   }
-  try{initScene();}
+  try{initScene();applyProjectionDefault();} // v2.8: плоский вид СВЕРХУ по умолчанию
   catch(err){
     console.error('[boot] WebGL',err);
     document.getElementById('loader').innerHTML='<div class="t" style="color:#ff2d55">WEBGL НЕДОСТУПЕН<br>'+
