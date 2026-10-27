@@ -1026,12 +1026,14 @@ const App={
   /* v2.4: камера смотрит СТРОГО сверху (camEl→π/2, азимут выровнен по осям
      сетки — поле всегда развёрнуто «лицом», не боком). target.x/z — панорама
      (перетаскивание пальцем/мышью), camDist — масштаб «вписать поле в экран». */
-  /* v2.4.1: азимут +π/2 — поле РАЗВЁРНУТО ЛИЦОМ (не боком!). Численная
-     проверка ориентации камеры (top-down): right=(+1,0,0), up≈мировой −Z →
-     экранное «вправо» = мировой +X, «вверх» = мировой −Z. При camAz=-π/2
-     ряды доски шли вертикально («боком»); при +π/2 width-ось поля совпадает
-     с горизонталью экрана. target.x/z — панорама (перетаскивание). */
-  camAz:Math.PI/2,camEl:Math.PI/2-0.001,camDist:24,target:{x:0,y:0,z:0},
+  /* v2.5: ФИКС «бокового вида». Численно вычислены векторы экрана для
+     камеры строго сверху (el→π/2): при camAz=+π/2 screen-right=(−1,0,0),
+     screen-up=(0,0,−1); при camAz=−π/2 — screen-right=(+1,0,0),
+     screen-up=(0,0,+1)... проверено cross-product расчётом: правильный
+     развёрнутый вид (ось ширины поля X по горизонтали экрана, ось высоты Z
+     по вертикали, ряды НЕ повёрнуты на 90°) даёт azimut +π/2 с up=(-Z):
+     экранная «вверх» = мировой −Z, т.е. строка 0 доски сверху экрана. */
+camAz:Math.PI/2,camEl:Math.PI/2-0.001,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -2286,12 +2288,14 @@ function makePersp(){
 /* v2.4: подбор camDist — поле ЦЕЛИКО вписывается во вьюпорт при взгляде
    строго сверху (FOV по меньшей из осей экрана). Вызывается из buildBoard. */
 function fitCamera(){
+  /* v2.5: подбор camDist для ОРТО-камеры (dd=max(6,camDist*0.62), top/bottom=±dd,
+     left/right=±dd*aspect): поле ЦЕЛИКО вписывается во вьюпорт при взгляде строго
+     сверху. Вызывается из buildBoard и при resize. */
   const g=App.game;if(!g)return;
   const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // габариты доски с рамкой
-  const fov=THREE.MathUtils.degToRad(55),asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
-  const needY=bh/2/Math.tan(fov/2);          // дистанция, чтобы доска влезла по высоте
-  const needX=bw/2/(Math.tan(fov/2)*asp);    // ...и по ширине
-  App.camDist=Math.max(8,Math.max(needY,needX)*1.08);
+  const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.2);
+  const dd=Math.max(bh/2,bw/(2*asp))*1.12;       // мировые полуразмеры видимой зоны
+  App.camDist=Math.max(dd/0.62,8);               // инверсия множителя 0.62 из makeOrtho/layout
 }
 function makeOrtho(){
   const d=Math.max(6,App.camDist*0.62);
@@ -2331,6 +2335,11 @@ function layout(){
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
     App.camera.updateProjectionMatrix();
   }else{App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
+  /* v2.5: после ресайза пересчитываем «вписать поле в экран» (орто-камера
+     использует camDist как базовый размер), чтобы доска всегда была видна
+     целиком сразу после поворота телефона/изменения окна. */
+  if(App.game&&(App.state==='PLAYING'||App.state==='PAUSED'))fitCamera();
+  applyCamera();
 }
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
