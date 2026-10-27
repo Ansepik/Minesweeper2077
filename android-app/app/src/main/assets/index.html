@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v10", // v10: v2.9 — исправлена ориентация поля (right=+X) и границы панорамы под орто-камеру
+  key:"cybersweep_save_v11", // v11: v3.0 — РАЗВЕРНУТО поле (численно: right=(-1,0,0), up=(0,0,+1); world-X=строки, world-Z=-столбцы)
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1218,10 +1218,11 @@ function makeTileBaseM(){
   return new THREE.Matrix4().compose(_v,_q,_s);
 }
 function cellPos(id){
-  /* v2.7: world-X = СТОЛБЦЫ (ширина w), world-Z = СТРОКИ (глубина h) — под
-     правильный азимут камеры camAz=+π/2 (right=(+1,0,0)): столбцы идут по
-     горизонтали экрана слева направо, строки по вертикали (row0 сверху). */
-  return {x:(id%App.W-(App.W-1)/2)*App.SZ,y:0,z:(((id/App.W)|0)-(App.hFix-1)/2)*App.SZ};
+  /* v3.0 (финальный фикс «вида сбоку»): ЧИСЛЕННО пересчитан базис lookAt
+     three.js r128 для camAz=-π/2, camEl≈π/2: right(экр.)=(-1,0,0), up(экр.)=(0,0,+1).
+     Значит чтобы столбцы шли по горизонтали СЛЕВА НАПРАВО, а row0 был СВЕРХУ:
+     world-X = СТРОКИ (растёт вверх экрана), world-Z = СТОЛБЦЫ (растёт влево → минус). */
+  return {x:(((id/App.W)|0)-(App.hFix-1)/2)*App.SZ,y:0,z:-((id%App.W-(App.W-1)/2)*App.SZ)};
 }
 function tileGeom(fy){
   /* Единый источник геометрии клетки по состоянию fy (TILE_HIDDEN|TILE_OPEN):
@@ -1720,7 +1721,8 @@ function clampPan(){
      панорамы считается по ПРОЕКЦИИ глубины, а не по чистой h*Sz. */
   const sq=Math.max(0.4,Math.sin(Math.min(App.camEl,Math.PI/2-0.001)));
   const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
-  const hx=Math.max(0,(g.w*App.SZ-visW)/2)+m,hz=Math.max(0,(g.h*App.SZ*sq-visH)/2)+m;
+  /* v3.0: ось X = строки (экранная ВЕРТИКАЛЬ), ось Z = столбцы (ГОРИЗОНТАЛЬ). */
+  const hx=Math.max(0,(g.h*App.SZ*sq-visH)/2)+m,hz=Math.max(0,(g.w*App.SZ-visW)/2)+m;
   App.target.x=Math.max(-hx,Math.min(hx,App.target.x));
   App.target.z=Math.max(-hz,Math.min(hz,App.target.z));
 }
@@ -2341,7 +2343,10 @@ function fitCamera(){
      вьюпорт. Вызывается из buildBoard и при resize. Мировая ширина X —
      экранная горизонталь, глубина Z — вертикаль (сжатие проекции cos(el)). */
   const g=App.game;if(!g)return;
-  const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // габариты доски с рамкой (X,Z)
+  /* v3.0: после разворота осей cellPos мировая ось X = СТРОКИ (экр. вертикаль),
+     ось Z = СТОЛБЦЫ (экр. горизонталь). Габарит по горизонтали — ширина поля w,
+     по вертикали — высота h (при flat-виде множитель проекции sq=1). */
+  const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // bw = экранная горизонталь (столбцы), bh = вертикаль (строки)
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.2);
   /* v2.8: при взгляде СТРОГО сверху (camEl≈π/2) cos(el)→0 и глубина поля
      проецировалась в ноль — dd схлопывался до минимума 6 м, орто-окно
@@ -2353,7 +2358,8 @@ function fitCamera(){
      а нижняя граница dd гарантированно покрывает доску. */
   const cosEl=Math.cos(Math.min(App.camEl,Math.PI/2-0.001));
   const sq=cosEl<0.2?1:cosEl;                    // flat-вид: без сжатия по вертикали
-  const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны
+  /* v3.0: экранная горизонталь = поле по ширине (bw), вертикаль = по высоте (bh). */
+  const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны (по вертикали)
   App.camDist=Math.min(Math.max(dd/0.62,8),60);  // инверсия 0.62 + потолок от «улёта» камеры
 }
 function makeOrtho(){
