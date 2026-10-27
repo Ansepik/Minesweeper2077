@@ -881,8 +881,8 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v17", // v3.6: финальный фикс ориентации поля (az=-pi/2 + x=-col,z=+row) — вид строго сверху, как в ТЗ
-  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
+  key:"cybersweep_save_v18", // v3.6: финальный фикс ориентации поля (az=-pi/2 + x=-col,z=+row) — вид строго сверху, как в ТЗ
+  def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:false,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
       const raw=localStorage.getItem(this.key);
@@ -1069,7 +1069,7 @@ const App={
      вид сапёра строго сверху: столбцы слева→направо, row 0 сверху.
      Все прошлые «фиксы» азимута спорили о знаке на глаз — теперь знак
      подтверждён численно. az=-π/2 давал right=(-1,0,0) = зеркально/боком. */
-  camAz:-Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0}, // v3.6: ТОЧНАЯ симуляция lookAt r128 (node): az=-pi/2 => screen-right=(-1,0,0), screen-up=(0,~1,+0.03) => мировой +Z проецируется ВНИЗ экрана, а col по -X растёт ВПРАВО; row 0 СВЕРХУ. Это единственная ориентация, дающая классический вид сапёра СВЕРХУ без поворота на 90° и без зеркал — в паре с cellPos (x=+col, z=+row). Прежний az=+pi/2 при x=+col,z=+row давал ПОВОРЁТ ПОЛЯ НА 90° («вид сбоку» всех v3.x).
+  camAz:0,camEl:0.01,camDist:24,target:{x:0,y:0,z:0}, // v3.7: ориентация камеры задаётся ПО ТРЕБОВАНИЮ ЗАКАЗЧИКА (точно как указано): camAz:0, camEl:0.01. applyCameraTo использует эту пару напрямую; makeOrtho ставит up=(0,0,-1) для вида строго сверху.
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1258,7 +1258,7 @@ function cellPos(id){
      ПОВОРЁТ ПОЛЯ НА 90° ("вид сбоку" жалоб v3.0-v3.5). Теперь пара:
      az=-pi/2 (screen-right=(-1,0,0), screen-up=(0,1,+eps)) + x=-col, z=+row:
      col растёт ВПРАВО экрана, row 0 СВЕРХУ, строки ВНИЗ — классический сапёр. */
-  return {x:-((id%App.W-(App.W-1)/2)*App.SZ),y:0,z:((((id/App.W)|0)-(App.hFix-1)/2)*App.SZ)};
+  return {x:((id%App.W-(App.W-1)/2)*App.SZ),y:0,z:((((id/App.W)|0)-(App.hFix-1)/2)*App.SZ)};
 }
 function tileGeom(fy){
   /* Единый источник геометрии клетки по состоянию fy (TILE_HIDDEN|TILE_OPEN):
@@ -1763,7 +1763,7 @@ function clampPan(){
   /* v2.7: при наклоне камеры мировая глубина Z проецируется на экранную
      вертикаль с множителем cos(el) — поле «умещается» раньше, граница
      панорамы считается по ПРОЕКЦИИ глубины, а не по чистой h*Sz. */
-  const sq=Math.max(0.4,Math.sin(Math.min(App.camEl,Math.PI/2-0.001)));
+  const sq=Math.cos(App.camEl); // v3.7: flat top-down (el=0.01): вертикаль экрана = мировая Z без сжатия
   const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
   /* v3.2: ось X = столбцы (экранная ГОРИЗОНТАЛЬ), ось Z = строки (ВЕРТИКАЛЬ) —
      как в v2.9; формулы границ возвращены к корректной привязке осей. */
@@ -2380,9 +2380,16 @@ function toggleProjection(){
 }
 function perspBase(){return new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,300);}
 function makePersp(){
-  const c=perspBase();
-  c.position.copy(App.camera.position);c.quaternion.copy(App.camera.quaternion);
-  applyCameraTo(c);return c;
+  /* v3.7: реализация точно по ТЗ заказчика — копируем текущую ориентацию
+     камеры, затем применяем базис через applyCameraTo. */
+  const c = perspBase();
+
+  c.position.copy(App.camera.position);
+  c.quaternion.copy(App.camera.quaternion);
+  c.up.copy(App.camera.up);
+
+  applyCameraTo(c);
+  return c;
 }
 /* v2.4: подбор camDist — поле ЦЕЛИКО вписывается во вьюпорт при взгляде
    строго сверху (FOV по меньшей из осей экрана). Вызывается из buildBoard. */
@@ -2405,7 +2412,7 @@ function fitCamera(){
      клетки». Теперь при flat-виде множитель проекции = 1 (доска занимает
      экран по вертикали СВОЕЙ реальной глубиной), camDist ограничен сверху,
      а нижняя граница dd гарантированно покрывает доску. */
-  const cosEl=Math.cos(Math.min(App.camEl,Math.PI/2-0.001));
+  const cosEl=Math.cos(App.camEl);
   const sq=cosEl<0.2?1:cosEl;                    // flat-вид: без сжатия по вертикали
   /* v3.0: экранная горизонталь = поле по ширине (bw), вертикаль = по высоте (bh). */
   const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны (по вертикали)
@@ -2415,37 +2422,77 @@ function makeOrtho(){
   const d=Math.max(6,App.camDist);
   const asp=innerWidth/innerHeight;
   const c=new THREE.OrthographicCamera(-d*asp,d*asp,d,-d,0.1,300);
-  c.position.copy(App.camera.position);c.lookAt(App.target.x,App.target.y,App.target.z);
+  c.position.copy(App.camera.position);
+  c.up.set(0,0,-1); // v3.7: up вдоль -Z => row 0 СВЕРХУ экрана, столбцы слева направо (строго сверху, по ТЗ)
+  c.lookAt(App.target.x,App.target.y,App.target.z);
   return c;
 }
 function applyCamera(){
+  if(!App.camera) return;
+
+  const t = App.target;
+  const dist = App.camDist;
+
   if(App.camera.isOrthographicCamera){
-    /* v2.3: орто-режим использует ту же почти-вертикальную камеру (applyCameraTo),
-       чтобы вид оставался статичным сверху и не прыгал в изометрию 45°. */
-    applyCameraTo(App.camera);
-    App.camera.lookAt(App.target.x,App.target.y,App.target.z);
-    const dd=Math.max(6,App.camDist),asp=innerWidth/innerHeight;
-    App.camera.left=-dd*asp;App.camera.right=dd*asp;App.camera.top=dd;App.camera.bottom=-dd;
+    // Ортографическая камера строго сверху
+    const d = Math.max(6, dist * 0.62);
+    const asp = innerWidth / innerHeight;
+
+    App.camera.position.set(
+      t.x,
+      t.y + dist,
+      t.z
+    );
+
+    // При взгляде строго вдоль оси Y
+    // направление вверх задаём вдоль оси Z
+    App.camera.up.set(0, 0, -1);
+    App.camera.lookAt(t.x, t.y, t.z);
+
+    App.camera.left = -d * asp;
+    App.camera.right = d * asp;
+    App.camera.top = d;
+    App.camera.bottom = -d;
     App.camera.updateProjectionMatrix();
-  }else{
+  } else {
     applyCameraTo(App.camera);
   }
 }
+
 function applyCameraTo(cam){
-  const el=Math.min(App.camEl,Math.PI/2-0.001); // v2.4: строго сверху, без перелёта через зенит
-  cam.position.set(
-    App.target.x+App.camDist*Math.sin(el)*Math.cos(App.camAz),
-    App.target.y+App.camDist*Math.cos(el),
-    App.target.z+App.camDist*Math.sin(el)*Math.sin(App.camAz)
-  );
-  cam.lookAt(App.target.x,App.target.y,App.target.z);
+  const t = App.target;
+  const dist = App.camDist;
+  const el = App.camEl;
+
+  if(el <= 0.03){
+    // Строго сверху: без бокового смещения
+    cam.position.set(
+      t.x,
+      t.y + dist,
+      t.z
+    );
+
+    // Не допускаем вырождения ориентации камеры
+    cam.up.set(0, 0, -1);
+  } else {
+    // Обычный свободный наклон камеры
+    cam.position.set(
+      t.x + dist * Math.sin(el) * Math.cos(App.camAz),
+      t.y + dist * Math.cos(el),
+      t.z + dist * Math.sin(el) * Math.sin(App.camAz)
+    );
+
+    cam.up.set(0, 1, 0);
+  }
+
+  cam.lookAt(t.x, t.y, t.z);
 }
 function layout(){
   const W=innerWidth,H=innerHeight;
   if(!App.renderer)return;
   App.renderer.setSize(W,H);
   if(App.camera.isOrthographicCamera){
-    const d=Math.max(6,App.camDist),asp=W/H;
+    const d=Math.max(6,App.camDist*0.62),asp=W/H; // v3.7: синхронно с applyCamera (формула из ТЗ)
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
     App.camera.updateProjectionMatrix();
   }else{App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
