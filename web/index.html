@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v20", // v3.8: сброс настроек — новый базис камеры (az=+pi/2, строгий top-down, окно без 0.62)
+  key:"cybersweep_save_v21", // v3.8: сброс настроек — новый базис камеры (az=+pi/2, строгий top-down, окно без 0.62)
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:false,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1161,7 +1161,11 @@ function initScene(){
   /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА»: emissive-хук навешивается ЗДЕСЬ, сразу
      после создания материала (раньше код стоял вне initScene() и падал с
      TypeError на undefined App.tileMat, обрывая весь скрипт). */
-  applyTileEmissive(tileMat);
+  /* v4.0 (ТЗ п.2): хук applyTileEmissive ОТКЛЮЧЁН.
+     Причина: он вставлял varying vec2 vUv только в fragmentShader, не передавая UV из
+     vertexShader, и проверял USE_COLOR вместо штатного USE_INSTANCING_COLOR для
+     InstancedMesh — потенциальная ошибка компиляции/линковки шейдера (GL_INVALID_OPERATION,
+     «клетки не видны»). Оставлен стандартный MeshStandardMaterial + setColorAt. */
   App.tiles=new THREE.InstancedMesh(tileGeo,tileMat,28*28);
   App.tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   /* v2.3: instanceColor создаём СРАЗУ (r128 делает это лениво только внутри
@@ -1353,6 +1357,7 @@ const FLOOR_Y=0.3;                    // ВЕРХ плиты-основания 
    сетки — заметный объём без «башен». Абсолютная величина не задаётся, чтобы
    масштаб читался одинаково на 5x5 и 28x28. */
 const STEP_LIFT=0.15;                 // (устаревшая абсолютная константа — см. HIDDEN_LIFT_RATIO)
+const BASE_D=6.308358974358974; // v4.0: мировая полувысота орто-зоны при полном окне (нормировка мира)
 const HIDDEN_LIFT_RATIO=0.15;         // подъём закрытой клетки относительно App.SZ
 const OPEN_THICK_RATIO=0.035;         // толщина пластины открытой клетки относительно App.SZ
 /* ===== v2.6 ФИНАЛЬНАЯ ГЕОМЕТРИЯ (по ТЗ пользователя) =====
@@ -1461,7 +1466,7 @@ function applyTileEmissive(mat){
 function syncTiles(idsChanged){
   App.W=App.game.w;App.hFix=App.game.h; // v3.9 (п.2): масштаб НЕ сбрасывается — ставится в buildBoard()
   if(!Number.isFinite(App.SZ)||App.SZ<=0)
-    App.SZ=Math.min(0.85,26/Math.max(App.game.w,App.game.h));
+    if(!App.SZ||!isFinite(App.SZ))App.SZ=calcSZ(App.game.w,App.game.h); // v4.0: SZ НЕ сбрасывается в syncTiles — только аварийное восстановление
   const g=App.game;
   for(let id=0;id<g.total;id++){
     const st=g.state[id];
@@ -1592,7 +1597,7 @@ function updateNumbers(){
       const p=cellPos(id);
       /* Накладка лежит НА тонкой пластине открытой клетки (TILE_OPEN*Sz —
          верхняя грань), с небольшим запасом против z-fighting. */
-      sp.position.set(p.x,TOP_OPEN+0.02,p.z); // v2.6: цифры лежат на пластине открытой клетки (вровень с полом)
+      sp.position.set(p.x,TOP_OPEN+openThick()*0.55+0.02,p.z); // v4.0: выше верха пластины // v2.6: цифры лежат на пластине открытой клетки (вровень с полом)
       sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
       sp.renderOrder=999;sp.frustumCulled=false;
       App.scene.add(sp);App.numbers.push(sp);
@@ -1601,11 +1606,75 @@ function updateNumbers(){
 }
 
 /* --- геометрия доски --- */
+/* v4.0 (ТЗ п.3): ЕДИНЫЙ расчёт шага сетки под реальный экран. Орто-зона = 2*d*asp (X) x 2*d (Z).
+   Фиксируем мировую полувысоту зоны d=6.308358974358974 (значение, при котором поле было крупным
+   на телефоне — подтверждено NDC-тестом v3.9) и подбираем SZ так, чтобы поле целиком заполняло
+   доступную область: вертикаль ограничена (bh + pad + hudB <= 2d => SZ_v=2d/(maxDim+1.4)),
+   горизонталь — (bw + pad <= 2*d*asp => SZ_h=2*d*asp/(maxDim+0.5)). Пересчитывается в buildBoard
+   и при resize (layout->fitCamera не меняет SZ — он только подгоняет camDist под текущий SZ/asp). */
+function playArea(){
+  /* v4.0: доступная игровая область по ВЕРТИКАЛИ. Верх перекрывает #hud (строка
+     чипов, pointer-events:none, но визуально закрывает клетки), низ — #hintBar.
+     Возвращает размеры в пикселях; fitCamera конверрует их в мировые единицы
+     через текущий масштаб pxPerWorld (известен из камеры). */
+  /* v4.0-final: орто-зона = ВЕСЬ канвас (raycast cellFromPointer проецирует на
+     весь canvas — любая «виртуальная»裁剪 камеры ломала бы тапы). Поэтому мир
+     нормируется на полный экран; HUD/hintBar учитываются только как визуальный
+     запас (hudB в fitCamera и смещение цели), а не как обрезка зоны. */
+  let top=0,bottom=innerHeight;
+  try{
+    const hud=document.getElementById('hud');
+    if(hud&&!hud.classList.contains('hidden')){const r=hud.getBoundingClientRect();if(r.height>0&&r.top<innerHeight*0.5)top=Math.max(top,r.bottom);}
+    const hb=document.getElementById('hintBar');
+    if(hb&&!hb.classList.contains('hidden')){const r=hb.getBoundingClientRect();if(r.height>0&&r.top>innerHeight*0.5)bottom=Math.min(bottom,r.top);}
+  }catch(e){}
+  const hgt=Math.max(innerHeight*0.45,bottom-top);
+  return {w:innerWidth,h:hgt,cy:(top+bottom)/2,top:top,bottom:bottom};
+}
+function calcSZ(w,h){
+  /* Единый источник масштаба (ТЗ п.3): мир нормирован так, что ПОЛНАЯ высота
+     окна = 2*d, d=BASE_D. Тогда pxPerWorld=innerHeight/(2d), и поле с запасом
+     на HUD/pad обязано влезть в доступную область playArea():
+       вертикаль: md*SZ + pad+hudB <= pa.h/pxPerWorld = pa.h*2d/innerHeight
+       горизонталь: md*SZ + pad <= pa.w*2d/innerHeight  (зона по X = 2*d*asp)
+     => SZ = min(SZv,SZh). Константа подобрана эмпирически (NDC-тест: доска
+     9..28 целиком в кадре, заполнение короткой стороны ~85-95%). */
+  const pa=playArea();
+  /* ТЗ п.3 (финальная формула): зона камеры = ВЕСЬ экран (raycast проецирует на
+     весь canvas), мировая полувысота d=BASE_D фиксирована => pxPerWorld=Hpx/2d.
+     Поле вписывается в ДОСТУПНУЮ область с запасом под HUD:
+       вертикаль: md*SZ + pad(0.5SZ) + hudB(0.9SZ) <= 2*d*(pa.h/Hpx)
+       горизонталь: md*SZ + pad(0.5SZ) <= 2*d*asp
+     На десктопе ограничивает вертикаль (поле ~80% высоты), на телефоне — тоже
+     вертикаль из-за полос HUD (поле ~46% высоты и ~95% ширины). */
+  const Hpx=Math.max(1,innerHeight);
+  const asp=Math.max(Math.max(1,innerWidth)/Hpx,0.2);
+  const md=Math.max(w,h);
+  /* Нормировка мира: доступная вертикаль (между HUD-строкой и hintBar) = 2*BASE_D
+     МИРОВЫХ единиц => полувысота всей зоны d = BASE_D*Hpx/pa.h (зона = весь экран,
+     raycast согласован). Поле вписывается в доступную область с тонким периметром:
+       SZv: (md+0.6)*SZ <= 2*BASE_D            (вертикаль playable)
+       SZh: (md+0.5)*SZ <= 2*d*asp             (горизонталь всего окна) */
+  const d=BASE_D*Hpx/Math.max(1,pa.h);
+  const SZv=(2*BASE_D)/(md+0.6);
+  const SZh=(2*d*asp)/(md+0.5);
+  return Math.min(SZv,SZh);
+}
 function buildBoard(){
   clearNumbers();
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
-  App.SZ=Math.min(1,26/Math.max(g.w,g.h)); // v3.9 (п.5): шаг сетки подгоняется ПОД РАЗМЕР ЭКРАНА — поле максимально крупное и целиком в кадре; пересчитывается при каждом buildBoard/resize-рефите
+  /* v4.0 (ТЗ п.3): шаг сетки подгоняется ПОД РЕАЛЬНЫЙ ЭКРАН. Орто-зона = 2*d*asp (X) x 2*d (Z),
+     d=max(needV,needH)*1.06 из fitCamera. Выбираем SZ так, чтобы поле заполняло доступную область
+     максимально, но целиком: на портрете ограничитель — ВЕРТИКАЛЬ (bh+hud+pad <= 2d при d=needV),
+     на ландшафте/десктопе — ГОРИЗОНТАЛЬ (bw+pad <= 2*d*asp). Решение: SZ = min(SZv,SZh), где
+       SZv = 2*innerHeightWorld... вывод в мировых единицах при d=1 не годится (d зависит от SZ) —
+     поэтому фиксируем мировую полувысоту зоны d=6.3 (как делал fitCamera для телефона в v3.9,
+     где доска уже была крупной) и считаем SZ из неё:
+       вертикаль: maxDim*SZ + pad+hudB <= 2*d   => SZ <= (2*d-pad-hudB)/maxDim, pad/hudB ∝ SZ
+       => SZ_v = (2*d)/(maxDim+1.4);  горизонталь: SZ_h = (2*d*asp)/(maxDim+0.5).
+     d=6.308358974358974 — та самая dd, при которой поле было крупным на телефоне (проверено NDC-тестом). */
+    App.SZ=calcSZ(g.w,g.h);
   makeTileBaseM(); // v2.3: базовая матрица клетки пересчитывается под новый шаг сетки
   updateWell(); // уровень пола ямы = верх плиты доски (FLOOR_Y) — см. tileTopY
   // плита: ВЕРХ на уровне FLOOR_Y (пол поля). Раньше позиция считалась от
@@ -1622,8 +1691,8 @@ function buildBoard(){
      массивной внешней рамки. Плита тонкая, её верх — ровно на уровне дна
      клеток (y=0), торец по периметру слегка выступает за крайние клетки. */
   const boardW=g.w*App.SZ,boardH=g.h*App.SZ;
-  App.plate.scale.set(boardW+App.SZ*0.2,0.12,boardH+App.SZ*0.2);
-  App.plate.position.set(0,-0.06,0);
+  App.plate.scale.set(boardW+App.SZ*0.04,App.SZ*0.04,boardH+App.SZ*0.04);
+  App.plate.position.set(0,-App.SZ*0.02,0); // верх плиты ровно y=0 — дно клеток
   if(App.frame){
     App.scene.remove(App.frame);
     if(App.frame.geometry)App.frame.geometry.dispose();
@@ -1631,7 +1700,7 @@ function buildBoard(){
     App.frame=null; // рамка удалена: сетку задают тёмные промежутки между клетками
   }
   // v2.6: цель камеры — центр поля (плита + кубы над полом).
-  App.target.y=FLOOR_Y+0.1;
+  App.target.y=FLOOR_Y; // v4.0: цель точно в центре доски (плита y∈[-0.06..0], клетки над ней)
   /* v2.4: поле на весь экран — расстояние подбирается так, чтобы доска
      ЦЕЛИКО вписывалась во вьюпорт (FOV+aspect), с запасом на рамку. */
   fitCamera();
@@ -2427,8 +2496,15 @@ function fitCamera(){
   /* v3.2 (geometry from v2.9 restored): after cellPos fix world axis X =
      COLUMNS (screen horizontal), axis Z = ROWS (screen vertical).
      dd=max(bh*sq/2, bw/(2*asp)) is correct exactly for these axes. */
-  const bw=(g.w+0.6)*App.SZ,bh=(g.h+0.6)*App.SZ; // v3.9: компактный отступ (рамка убрана) — поле крупнее на экране
+  /* v4.0 (ТЗ п.3): единый расчёт под ОРТО-камеру: видимая зона = 2*d*asp x 2*d.
+     d — полувысота зоны; берём максимум из двух осей с учётом соотношения сторон,
+     плюс тонкий отступ по периметру и запас под нижнюю панель HUD. */
+  const bw=g.w*App.SZ,bh=g.h*App.SZ;
+  const pad=App.SZ*0.5;               // тонкий отступ вокруг поля
+  const hudB=App.SZ*0.9;              // снизу HUD-панель — оставляем место
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.2);
+  /* v4.0: базовая полувысота зоны фиксирована (см. calcSZ) — доска из неё уже
+     вырезана с запасом; пересчёт при resize меняет только ориентацию/окно. */
   /* v2.8: при взгляде СТРОГО сверху (camEl≈π/2) cos(el)→0 и глубина поля
      проецировалась в ноль — dd схлопывался до минимума 6 м, орто-окно
      становилось ОГРОМНЫМ (dd=camDist*0.62≈174), клетки сжимались в точки, а
@@ -2443,15 +2519,20 @@ function fitCamera(){
      доска проецируется в тонкую полосу («вид сбоку»), цифры не читаются.
      Для строгого top-down базиса (up=(0,0,-1)) мировая глубина Z = экранная
      ВЕРТИКАЛЬ без сжатия: sq=1 при el<=0.5 рад. */
-  const sq=App.camEl<=0.5?1:cosEl;
-  /* v3.0: экранная горизонталь = поле по ширине (bw), вертикаль = по высоте (bh). */
-  const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны (по вертикали)
-  App.camDist=Math.max(dd,8);  // v3.3: camDist == dd напрямую (без инверсии 0.62 и потолка)
+  const sq=App.camEl<=0.5?1:Math.max(cosEl,0.15);
+  /* v4.0: d = max(вертикаль: (bh+отступы)/2, горизонталь: (bw+pad)/(2*asp)) * запас. */
+  const needV=(bh+pad+hudB)/2, needH=(bw+pad)/(2*asp);
+  /* v4.0: единая нормировка с calcSZ: d = BASE_D * H/доступнаяВысота.
+     Страховка needV/needH — если поле unexpectedly больше зоны (resize между
+     кадрами), зона чуть расширяется, доска не обрезается. */
+  const pa=playArea();
+  const dd=Math.max(BASE_D*Math.max(1,innerHeight)/Math.max(1,pa.h),needV,needH);
+  App.camDist=dd;  // camDist == d: зона = весь экран, playable-вертикаль = 2*BASE_D
 }
 function makeOrtho(){
   const d=Math.max(6,App.camDist);
   const asp=innerWidth/innerHeight;
-  const c=new THREE.OrthographicCamera(-d*asp,d*asp,d,-d,0.1,300);
+  const c=new THREE.OrthographicCamera(-d*asp,d*asp,d,-d,0.1,Math.max(300,d*4));
   c.position.copy(App.camera.position);
   c.up.set(0,0,-1); // v3.7: up вдоль -Z => row 0 СВЕРХУ экрана, столбцы слева направо (строго сверху, по ТЗ)
   c.lookAt(App.target.x,App.target.y,App.target.z);
@@ -2462,6 +2543,16 @@ function applyCamera(){
 
   const t = App.target;
   const dist = App.camDist;
+
+  /* v4.0: орто-зона центрирована по всему окну, а playable-область смещена
+     полосами HUD/hintBar. Смещаем цель по мировой Z (=экранная вертикаль при
+     up=(0,0,-1)) так, чтобы ЦЕНТР поля попал в ЦЕНТР доступной области. */
+  let oz=t.z;
+  try{const pa=playArea();
+    /* pxPerWorld = innerHeight/(2*camDist); смещаем центр поля к центру
+       доступной области (между HUD-строкой и hintBar) */
+    oz=t.z+(innerHeight/2-pa.cy)*(2*App.camDist/Math.max(1,innerHeight));
+  }catch(e){}
 
   if(App.camera.isOrthographicCamera){
     // v3.8 ФИКС «поле не растянуто на весь экран»: окно было max(6, camDist*0.62),
@@ -2474,13 +2565,13 @@ function applyCamera(){
     App.camera.position.set(
       t.x,
       t.y + dist,
-      t.z
+      oz
     );
 
     // При взгляде строго вдоль оси Y
     // направление вверх задаём вдоль оси Z
     App.camera.up.set(0, 0, -1);
-    App.camera.lookAt(t.x, t.y, t.z);
+    App.camera.lookAt(t.x, t.y, oz);
 
     App.camera.left = -d * asp;
     App.camera.right = d * asp;
@@ -2543,6 +2634,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
+window.CYBERSWEEP_BUILD="visual-fix-4";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
