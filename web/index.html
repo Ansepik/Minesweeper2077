@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v18", // v3.6: финальный фикс ориентации поля (az=-pi/2 + x=-col,z=+row) — вид строго сверху, как в ТЗ
+  key:"cybersweep_save_v19", // v3.8: сброс настроек — новый базис камеры (az=+pi/2, строгий top-down, окно без 0.62)
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:false,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1069,7 +1069,7 @@ const App={
      вид сапёра строго сверху: столбцы слева→направо, row 0 сверху.
      Все прошлые «фиксы» азимута спорили о знаке на глаз — теперь знак
      подтверждён численно. az=-π/2 давал right=(-1,0,0) = зеркально/боком. */
-  camAz:0,camEl:0.01,camDist:24,target:{x:0,y:0,z:0}, // v3.7: ориентация камеры задаётся ПО ТРЕБОВАНИЮ ЗАКАЗЧИКА (точно как указано): camAz:0, camEl:0.01. applyCameraTo использует эту пару напрямую; makeOrtho ставит up=(0,0,-1) для вида строго сверху.
+  camAz:Math.PI/2,camEl:0.01,camDist:24,target:{x:0,y:0,z:0}, // v3.8: camAz=+π/2 — единственный азимут, при котором lookAt-базис даёт screen-right=мировой +X (численно проверено симуляцией точной формулы Matrix4.lookAt r128). В паре с cellPos (X=столбцы col, Z=строки row) это КЛАССИЧЕСКИЙ вид сапёра. При az=0 (значение из ТЗ) мировой +X проецировался ВГЛУБЬ экрана — доска стояла РОВНО БОКОМ (жалоба v3.7); само число camEl:0.01 сохранено и в этой ветке камера теперь ставится СТРОГО вертикально (см. applyCameraTo).
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1258,6 +1258,8 @@ function cellPos(id){
      ПОВОРЁТ ПОЛЯ НА 90° ("вид сбоку" жалоб v3.0-v3.5). Теперь пара:
      az=-pi/2 (screen-right=(-1,0,0), screen-up=(0,1,+eps)) + x=-col, z=+row:
      col растёт ВПРАВО экрана, row 0 СВЕРХУ, строки ВНИЗ — классический сапёр. */
+  /* v3.8: базис камеры up=(0,0,-1) (любой азимут): screen-right=мировой +X,
+     screen-up=мировой -Z => col растёт ВПРАВО, row 0 СВЕРХУ — классический сапёр. */
   return {x:((id%App.W-(App.W-1)/2)*App.SZ),y:0,z:((((id/App.W)|0)-(App.hFix-1)/2)*App.SZ)};
 }
 function tileGeom(fy){
@@ -1763,7 +1765,7 @@ function clampPan(){
   /* v2.7: при наклоне камеры мировая глубина Z проецируется на экранную
      вертикаль с множителем cos(el) — поле «умещается» раньше, граница
      панорамы считается по ПРОЕКЦИИ глубины, а не по чистой h*Sz. */
-  const sq=Math.cos(App.camEl); // v3.7: flat top-down (el=0.01): вертикаль экрана = мировая Z без сжатия
+  const sq=Math.cos(App.camEl); // v3.8: при el<=0.5 рад камера ставится СТРОГО сверху (см. applyCameraTo) — вертикаль экрана = мировая Z без сжатия
   const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
   /* v3.2: ось X = столбцы (экранная ГОРИЗОНТАЛЬ), ось Z = строки (ВЕРТИКАЛЬ) —
      как в v2.9; формулы границ возвращены к корректной привязке осей. */
@@ -2413,7 +2415,12 @@ function fitCamera(){
      экран по вертикали СВОЕЙ реальной глубиной), camDist ограничен сверху,
      а нижняя граница dd гарантированно покрывает доску. */
   const cosEl=Math.cos(App.camEl);
-  const sq=cosEl<0.2?1:cosEl;                    // flat-вид: без сжатия по вертикали
+  /* v3.8: camEl=0.01 — это НЕ «наклон сверху», а почти ГОРИЗОНТАЛЬНЫЙ вид:
+     камера стоит на высоте camDist*0.01 над целью и смотрит вдоль земли,
+     доска проецируется в тонкую полосу («вид сбоку»), цифры не читаются.
+     Для строгого top-down базиса (up=(0,0,-1)) мировая глубина Z = экранная
+     ВЕРТИКАЛЬ без сжатия: sq=1 при el<=0.5 рад. */
+  const sq=App.camEl<=0.5?1:cosEl;
   /* v3.0: экранная горизонталь = поле по ширине (bw), вертикаль = по высоте (bh). */
   const dd=Math.max(bh*sq/2,bw/(2*asp))*1.12;    // мировые полуразмеры видимой зоны (по вертикали)
   App.camDist=Math.max(dd,8);  // v3.3: camDist == dd напрямую (без инверсии 0.62 и потолка)
@@ -2434,8 +2441,11 @@ function applyCamera(){
   const dist = App.camDist;
 
   if(App.camera.isOrthographicCamera){
-    // Ортографическая камера строго сверху
-    const d = Math.max(6, dist * 0.62);
+    // v3.8 ФИКС «поле не растянуто на весь экран»: окно было max(6, camDist*0.62),
+    // а fitCamera закладывал размер поля прямо в camDist (без инверсии 0.62).
+    // Итог: доска занимала ~62% экрана (на десктопе и того меньше по горизонтали) —
+    // клетки сжимались в точки, цифры (размером с клетку) не читались.
+    const d = Math.max(6, dist);
     const asp = innerWidth / innerHeight;
 
     App.camera.position.set(
@@ -2465,11 +2475,16 @@ function applyCameraTo(cam){
   const el = App.camEl;
 
   if(el <= 0.03){
-    // Строго сверху: без бокового смещения
+    // v3.8 ФИКС «вида сбоку»: el=0.01 рад = камера на высоте dist*0.01 над
+    // целью, т.е. почти ГОРИЗОНТАЛЬНЫЙ взгляд вдоль земли (доска сплющена в
+    // полосу). Теперь это ветка СТРОГОГО top-down: позиция берётся из el как
+    // у наклонной камеры, но при малом el sin(el)≈el→0 и cos(el)≈1 — то есть
+    // камера встаёт ровно (t.x, t.y+dist, t.z), оптическая ось вертикальна.
+    // up=(0,0,-1): row 0 сверху экрана, столбцы слева направо (мировой +X).
     cam.position.set(
-      t.x,
-      t.y + dist,
-      t.z
+      t.x + dist * Math.sin(el) * Math.cos(App.camAz),
+      t.y + dist * Math.cos(el),
+      t.z + dist * Math.sin(el) * Math.sin(App.camAz)
     );
 
     // Не допускаем вырождения ориентации камеры
@@ -2492,7 +2507,7 @@ function layout(){
   if(!App.renderer)return;
   App.renderer.setSize(W,H);
   if(App.camera.isOrthographicCamera){
-    const d=Math.max(6,App.camDist*0.62),asp=W/H; // v3.7: синхронно с applyCamera (формула из ТЗ)
+    const d=Math.max(6,App.camDist),asp=W/H; // v3.8: синхронно с applyCamera (без множителя 0.62 — иначе поле не растянуто на весь экран)
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
     App.camera.updateProjectionMatrix();
   }else{App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
