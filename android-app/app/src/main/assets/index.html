@@ -881,7 +881,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v11", // v11: v3.0 — РАЗВЕРНУТО поле (численно: right=(-1,0,0), up=(0,0,+1); world-X=строки, world-Z=-столбцы)
+  key:"cybersweep_save_v12", // v12: v3.2 — исправлена арифметика lookAt; camAz=+pi/2, X=столбцы, Z=строки — поле развёрнуто, вид ровно сверху
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:true,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1041,7 +1041,10 @@ const App={
      camAz=-π/2 → right=(+1,0,0)=мировой +X (столбцы поля слева направо),
      up_cam≈(0,1,-0.03) → мировой −Z наверху (row 0 сверху). Поле развёрнуто
      лицом, как в классическом сапёре, при взгляде СТРОГО сверху. */
-  camAz:-Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0},
+  /* v3.2: camAz=+π/2 => eye=(-D·sin? нет): cos(π/2)=0, sin(π/2)=1 → eye=(0,Y,+D),
+     камера СНАДИ (+Z) смотрит на -Z: screen-right=+X (столбцы слева направо),
+     screen-up=-Z (row0 сверху). ЧИСЛЕННО ПРОВЕРЕНО точной формулой lookAt r128. */
+  camAz:Math.PI/2,camEl:Math.PI/2-0.03,camDist:24,target:{x:0,y:0,z:0},
   animParts:[],raf:0,timerH:null,time:0,startTs:0,peekIds:null,lastTap:{id:-1,t:0},
   dust:null,freeMode:false,
   /* Анимационный слой плиток: tileAnim[id]={s:scaleY, o:0|1(цель твина)}.
@@ -1218,11 +1221,14 @@ function makeTileBaseM(){
   return new THREE.Matrix4().compose(_v,_q,_s);
 }
 function cellPos(id){
-  /* v3.0 (финальный фикс «вида сбоку»): ЧИСЛЕННО пересчитан базис lookAt
-     three.js r128 для camAz=-π/2, camEl≈π/2: right(экр.)=(-1,0,0), up(экр.)=(0,0,+1).
-     Значит чтобы столбцы шли по горизонтали СЛЕВА НАПРАВО, а row0 был СВЕРХУ:
-     world-X = СТРОКИ (растёт вверх экрана), world-Z = СТОЛБЦЫ (растёт влево → минус). */
-  return {x:(((id/App.W)|0)-(App.hFix-1)/2)*App.SZ,y:0,z:-((id%App.W-(App.W-1)/2)*App.SZ)};
+  /* v3.2 ФИНАЛЬНЫЙ фикс «вида сбоку». В v3.0 здесь была АРИФМЕТИЧЕСКАЯ ОШИБКА:
+     записано right=(-1,0,0) при camAz=-π/2, хотя точная формула Matrix4.lookAt
+     three.js r128 даёт right=cross(up,z)=(-sin(camAz),0,cos(camAz)) => при
+     camAz=-π/2 это (+1,0,0). Из-за этого поле было повёрнуто на 90° («сбоку»).
+     Теперь (совместно с camAz=+π/2 ниже): экранное право = мировой +X,
+     экранное верх = мировой -Z. КЛАССИЧЕСКАЯ раскладка сапёра:
+     world-X = СТОЛБЦЫ (col растёт слева направо), world-Z = СТРОКИ (row растёт сверху вниз). */
+  return {x:((id%App.W-(App.W-1)/2)*App.SZ),y:0,z:((((id/App.W)|0)-(App.hFix-1)/2)*App.SZ)};
 }
 function tileGeom(fy){
   /* Единый источник геометрии клетки по состоянию fy (TILE_HIDDEN|TILE_OPEN):
@@ -1721,8 +1727,9 @@ function clampPan(){
      панорамы считается по ПРОЕКЦИИ глубины, а не по чистой h*Sz. */
   const sq=Math.max(0.4,Math.sin(Math.min(App.camEl,Math.PI/2-0.001)));
   const m=0.8; // небольшой запас, чтобы рамка доски могла выйти за край
-  /* v3.0: ось X = строки (экранная ВЕРТИКАЛЬ), ось Z = столбцы (ГОРИЗОНТАЛЬ). */
-  const hx=Math.max(0,(g.h*App.SZ*sq-visH)/2)+m,hz=Math.max(0,(g.w*App.SZ-visW)/2)+m;
+  /* v3.2: ось X = столбцы (экранная ГОРИЗОНТАЛЬ), ось Z = строки (ВЕРТИКАЛЬ) —
+     как в v2.9; формулы границ возвращены к корректной привязке осей. */
+  const hx=Math.max(0,(g.w*App.SZ-visW)/2)+m,hz=Math.max(0,(g.h*App.SZ*sq-visH)/2)+m;
   App.target.x=Math.max(-hx,Math.min(hx,App.target.x));
   App.target.z=Math.max(-hz,Math.min(hz,App.target.z));
 }
@@ -2343,9 +2350,9 @@ function fitCamera(){
      вьюпорт. Вызывается из buildBoard и при resize. Мировая ширина X —
      экранная горизонталь, глубина Z — вертикаль (сжатие проекции cos(el)). */
   const g=App.game;if(!g)return;
-  /* v3.0: после разворота осей cellPos мировая ось X = СТРОКИ (экр. вертикаль),
-     ось Z = СТОЛБЦЫ (экр. горизонталь). Габарит по горизонтали — ширина поля w,
-     по вертикали — высота h (при flat-виде множитель проекции sq=1). */
+  /* v3.2 (geometry from v2.9 restored): after cellPos fix world axis X =
+     COLUMNS (screen horizontal), axis Z = ROWS (screen vertical).
+     dd=max(bh*sq/2, bw/(2*asp)) is correct exactly for these axes. */
   const bw=(g.w+1.6)*App.SZ,bh=(g.h+1.6)*App.SZ; // bw = экранная горизонталь (столбцы), bh = вертикаль (строки)
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.2);
   /* v2.8: при взгляде СТРОГО сверху (camEl≈π/2) cos(el)→0 и глубина поля
