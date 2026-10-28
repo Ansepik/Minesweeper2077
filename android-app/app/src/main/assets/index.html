@@ -1156,8 +1156,12 @@ function initScene(){
 
   // Инстанс-меши: плитки / флаги / вопросы / подсветка
   const tileGeo=new THREE.BoxGeometry(1,1,1);
-  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.42,metalness:0.35});
-  App.tileMat=tileMat; // ссылка для onBeforeCompile (см. ниже)
+  /* v4.1 (ТЗ п.2): стандартный MeshStandardMaterial БЕЗ кастомного шейдера.
+     Металл чуть грубее — верхняя грань (прямой DirectionalLight сверху) и
+     боковые грани (заполняющий Ambient + боковые Point'ы cyan/magenta)
+     различаются по яркости даже без emissive-хука. */
+  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.5,metalness:0.5});
+  App.tileMat=tileMat; // ссылка на материал (для перекраски/отладки)
   /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА»: emissive-хук навешивается ЗДЕСЬ, сразу
      после создания материала (раньше код стоял вне initScene() и падал с
      TypeError на undefined App.tileMat, обрывая весь скрипт). */
@@ -1196,7 +1200,10 @@ function initScene(){
   // ВАЖНО (почему маркер раньше было не видно): материал был чисто белый с
   // emissiveIntensity 0.7 — на скрытой плитке такого же светлого тона маркер
   // просто сливался с ней. Теперь тело тёмное, а свечение цветное — контраст гарантирован.
-  const bombGeo=new THREE.SphereGeometry(0.26,14,12);bombGeo.scale(1,0.85,1);bombGeo.translate(0,0.26,0); // v3.9: приземлённая сфера-бомба (низ на y=0)
+  /* v4.1 (ТЗ п.3): бомба в локальных координатах нормирована на ШАГ КЛЕТКИ
+     (масштаб App.SZ применяется в setDeco). Диаметр сферы 0.52 → ~0.44 шага
+     вместе с кольцом — в пределах 45–55% ширины клетки. */
+  const bombGeo=new THREE.SphereGeometry(0.26,14,12);bombGeo.scale(1,0.85,1);bombGeo.translate(0,0.26,0); // сфера: низ на y=0, верх y≈0.48
   /* ВАЖНО (почему метки-бомбы «не отображались»): у InstancedMesh по
      умолчанию frustumCulled=true и для отсечения используется bounding sphere
      исходной геометрии (вокруг точки 0,0,0), которая НЕ учитывает позиции
@@ -1216,6 +1223,19 @@ function initScene(){
   App.flags.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.5,0),1e4);
   App.fuses.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.8,0),1e4);
   App.scene.add(App.fuses);
+
+  /* v4.1 (ТЗ п.3): НЕОНОВОЕ КОЛЬЦО бомбы — реальная TorusGeometry (режущая
+     плоскость по умолчанию XY => torus.rotateX(-PI/2) кладёт кольцо в мировую
+     XZ: при взгляде сверху оно видно как яркая окружность вокруг сферы).
+     Тонкое (tube 0.045), красно-малиновое, с emissive-свечением; лежит на
+     «экваторе» сферы (центр y=0.26), радиус 0.34 > радиуса сферы 0.26 —
+     кольцо охватывает её и не з-fights'ит с гранями клетки. */
+  const ringGeo=new THREE.TorusGeometry(0.34,0.045,8,24);
+  ringGeo.rotateX(-Math.PI/2);ringGeo.translate(0,0.26,0);
+  App.rings=new THREE.InstancedMesh(ringGeo,new THREE.MeshStandardMaterial({color:0x1a0308,emissive:0xff2d6b,emissiveIntensity:1.15,roughness:0.35,metalness:0.2}),28*28);
+  App.rings.frustumCulled=false;App.rings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  App.rings.geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0.3,0),1e4);
+  App.scene.add(App.rings);
 
   // Режим «?» полностью удалён из игры — меш вопросов больше не создаётся
   // (раньше при случайном state===3 рисовалось непонятное кольцо — «какая-то хуйня»).
@@ -1341,7 +1361,10 @@ function setDeco(mesh,id,on,lift,color,scl){
    курсором — электрик-циан, открытая — глубокий графит. */
 /* v3.9 (ТЗ п.6): палитра «тёмный графитовый металл» — закрытая клетка заметно
    светлее открытой, подсветка под курсором теплее, проигрыш — тёмная малина. */
-const cHidden=new THREE.Color(0x263541),cOpen=new THREE.Color(0x0b1118),cHot=new THREE.Color(0x344c5c),cDead=new THREE.Color(0x4a101c);
+/* v4.1 (ТЗ п.2): палитра «тёмный объёмный металл» — закрытая клетка тёмная,
+   но заметно светлее открытой; перепад высот + разное освещение верха/боков
+   дают объём. Цифры (неоновые, светлые) на графите открытых клеток читаются. */
+const cHidden=new THREE.Color(0x37485a),cOpen=new THREE.Color(0x0b1118),cHot=new THREE.Color(0x46606f),cDead=new THREE.Color(0x4a101c);
 /* ОБЪЁМ КЛЕТОК (ФИНАЛЬНЫЙ ФИКС «поле выглядит пустым, кубов не видно»):
    1) Раньше скрытая клетка была высотой ~App.SZ (0.3 м на больших полях) —
       плоский «блин», перепад с открытой пластиной не читался. Теперь высота
@@ -1358,7 +1381,7 @@ const FLOOR_Y=0.3;                    // ВЕРХ плиты-основания 
    масштаб читался одинаково на 5x5 и 28x28. */
 const STEP_LIFT=0.15;                 // (устаревшая абсолютная константа — см. HIDDEN_LIFT_RATIO)
 const BASE_D=6.308358974358974; // v4.0: мировая полувысота орто-зоны при полном окне (нормировка мира)
-const HIDDEN_LIFT_RATIO=0.15;         // подъём закрытой клетки относительно App.SZ
+const HIDDEN_LIFT_RATIO=0.32;         // подъём закрытой клетки относительно App.SZ (v4.1: объём читается на любом масштабе)
 const OPEN_THICK_RATIO=0.035;         // толщина пластины открытой клетки относительно App.SZ
 /* ===== v2.6 ФИНАЛЬНАЯ ГЕОМЕТРИЯ (по ТЗ пользователя) =====
    - Закрытые кубы: блок от уровня ПОЛА (FLOOR_Y) до FLOOR_Y+STEP_LIFT —
@@ -1494,7 +1517,7 @@ function syncTiles(idsChanged){
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
 
   // флаги / подсветка
-  App.flags._n=0;App.glows._n=0;App.fuses._n=0;
+  App.flags._n=0;App.glows._n=0;App.fuses._n=0;App.rings._n=0;
   for(let id=0;id<g.total;id++){
     // ВАЖНО: раньше маркер-бомба рисовался ТОЛЬКО для state===2, а при
     // аккорде g.chord() превращает флаги в открытые клетки (state=1) —
@@ -1513,21 +1536,23 @@ function syncTiles(idsChanged){
        плиткой и была полностью невидима. Теперь метки явно масштабируются
        под размер клетки (0.85*Sz) и поднимаются над её верхней гранью. */
     if(g.state[id]===2){
-      /* ФИКС v2.1.9: метка ставится НА ВЕРХ куба (низ блока = 0, верх = h),
-         раньше высота бралась из старой «ямы» и бомба тонула в кубе. */
-      const lift=0.05; // v3.9: метка на верхней грани куба (+0.05)
+      /* v4.1: полный комплект маркера — сфера + кольцо + фитиль (все слои
+         масштабируются App.SZ в setDeco, стоят на верхней грани куба). */
+      const lift=0.05; // метка на верхней грани куба (+0.05)
       setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
+      setDeco(App.rings,id,true,lift,new THREE.Color(0xff2d6b),0.85);
       setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     } else if(App.bombMarks&&App.bombMarks.has(id)&&g.state[id]!==1){
       // СТРАХОВКА: если флаг по какой-то причине «потерялся» в state, но
       // метка ещё в списке — рисуем бомбу поверх скрытой клетки в любом случае.
-      const lift=0.05; // v3.9: метка на верхней грани куба (+0.05)
+      const lift=0.05; // метка на верхней грани куба (+0.05)
       setDeco(App.flags,id,true,lift,new THREE.Color(0xffd24a),0.85);
+      setDeco(App.rings,id,true,lift,new THREE.Color(0xff2d6b),0.85);
       setDeco(App.fuses,id,true,lift+0.1*App.SZ,new THREE.Color(0xffee00),0.85);
     }
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-STEP_LIFT*0.4,new THREE.Color(COLORS.cyan),1.05); // v3.9: подсветка — у середины куба
   }
-  finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);
+  finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);finishInst(App.rings);
   updateNumbers();
 }
 function finishInst(mesh){
@@ -1632,32 +1657,31 @@ function playArea(){
   return {w:innerWidth,h:hgt,cy:(top+bottom)/2,top:top,bottom:bottom};
 }
 function calcSZ(w,h){
-  /* Единый источник масштаба (ТЗ п.3): мир нормирован так, что ПОЛНАЯ высота
-     окна = 2*d, d=BASE_D. Тогда pxPerWorld=innerHeight/(2d), и поле с запасом
-     на HUD/pad обязано влезть в доступную область playArea():
-       вертикаль: md*SZ + pad+hudB <= pa.h/pxPerWorld = pa.h*2d/innerHeight
-       горизонталь: md*SZ + pad <= pa.w*2d/innerHeight  (зона по X = 2*d*asp)
-     => SZ = min(SZv,SZh). Константа подобрана эмпирически (NDC-тест: доска
-     9..28 целиком в кадре, заполнение короткой стороны ~85-95%). */
+  /* v4.1 (ТЗ п.1): ЕДИНАЯ согласованная система с fitCamera/applyCamera/layout.
+
+     Орто-камера: видимая зона = 2*d*asp (X) x 2*d (Z), d — полувысота зоны,
+     asp = innerWidth/innerHeight. Нормировка мира: d = BASE_D * Hpx/pa.h
+     (pa.h — высота ДОСТУПНОЙ области между HUD и hintBar, Hpx — весь экран).
+     Доступная вертикаль в МИРОВЫХ единицах = 2*d*(pa.h/Hpx) = 2*BASE_D —
+     константа, не зависящая от ориентации/размера окна. Отсюда (md=max(w,h),
+     запас по периметру pad=0.5*SZ + нижняя панель hudB=0.9*SZ):
+
+       вертикаль: md*SZ + 1.4*SZ <= 2*BASE_D   => SZv = 2*BASE_D/(md+1.4)
+       горизонталь: md*SZ + 0.5*SZ <= 2*d*asp  => SZh = 2*d*asp/(md+0.5)
+       SZ = min(SZv, SZh)
+
+     ВЕРТИКАЛЬНЫЙ ограничитель симметричен по w,h: при повороте телефона
+     меняются pa.h и asp → SZ и camDist пересчитываются теми же формулами
+     (layout→fitCamera→applyCamera), поле всегда максимально крупное и ЦЕЛИКО
+     видимое. Совместно с fitCamera: dd = max(BASE_D*H/pa.h, needV, needH)
+     при том же SZ даёт dd == d (страховки не активны) — рассинхрона нет. */
   const pa=playArea();
-  /* ТЗ п.3 (финальная формула): зона камеры = ВЕСЬ экран (raycast проецирует на
-     весь canvas), мировая полувысота d=BASE_D фиксирована => pxPerWorld=Hpx/2d.
-     Поле вписывается в ДОСТУПНУЮ область с запасом под HUD:
-       вертикаль: md*SZ + pad(0.5SZ) + hudB(0.9SZ) <= 2*d*(pa.h/Hpx)
-       горизонталь: md*SZ + pad(0.5SZ) <= 2*d*asp
-     На десктопе ограничивает вертикаль (поле ~80% высоты), на телефоне — тоже
-     вертикаль из-за полос HUD (поле ~46% высоты и ~95% ширины). */
   const Hpx=Math.max(1,innerHeight);
   const asp=Math.max(Math.max(1,innerWidth)/Hpx,0.2);
   const md=Math.max(w,h);
-  /* Нормировка мира: доступная вертикаль (между HUD-строкой и hintBar) = 2*BASE_D
-     МИРОВЫХ единиц => полувысота всей зоны d = BASE_D*Hpx/pa.h (зона = весь экран,
-     raycast согласован). Поле вписывается в доступную область с тонким периметром:
-       SZv: (md+0.6)*SZ <= 2*BASE_D            (вертикаль playable)
-       SZh: (md+0.5)*SZ <= 2*d*asp             (горизонталь всего окна) */
-  const d=BASE_D*Hpx/Math.max(1,pa.h);
-  const SZv=(2*BASE_D)/(md+0.6);
-  const SZh=(2*d*asp)/(md+0.5);
+  const d=BASE_D*Hpx/Math.max(1,pa.h);          // полувысота орто-зоны (мировые ед.)
+  const SZv=(2*BASE_D)/(md+1.4);                // ограничитель по ВЕРТИКАЛИ playable
+  const SZh=(2*d*asp)/(md+0.5);                 // ограничитель по ГОРИЗОНТАЛИ всего окна
   return Math.min(SZv,SZh);
 }
 function buildBoard(){
@@ -2520,12 +2544,14 @@ function fitCamera(){
      Для строгого top-down базиса (up=(0,0,-1)) мировая глубина Z = экранная
      ВЕРТИКАЛЬ без сжатия: sq=1 при el<=0.5 рад. */
   const sq=App.camEl<=0.5?1:Math.max(cosEl,0.15);
-  /* v4.0: d = max(вертикаль: (bh+отступы)/2, горизонталь: (bw+pad)/(2*asp)) * запас. */
-  const needV=(bh+pad+hudB)/2, needH=(bw+pad)/(2*asp);
-  /* v4.0: единая нормировка с calcSZ: d = BASE_D * H/доступнаяВысота.
-     Страховка needV/needH — если поле unexpectedly больше зоны (resize между
-     кадрами), зона чуть расширяется, доска не обрезается. */
+  /* v4.1 (ТЗ п.1): d = max(вертикаль: (bh*sq+отступы)/2, горизонталь: (bw*sq+pad)/(2*asp)).
+     Множитель sq — проекционное сжатие глубины при НАКЛОНЕ камеры (top-down: sq=1). */
+  const needV=(bh*sq+pad+hudB)/2, needH=(bw*sq+pad)/(2*asp);
   const pa=playArea();
+
+  /* v4.1 (ТЗ п.1): нижняя граница зоны — max(нормировка BASE_D*H/pa.h, needV, needH).
+     При SZ из calcSZ обе страховки точно равны базовому d → dd==d (без рассинхрона);
+     если поле unexpectedly больше (resize между кадрами) — зона расширяется. */
   const dd=Math.max(BASE_D*Math.max(1,innerHeight)/Math.max(1,pa.h),needV,needH);
   App.camDist=dd;  // camDist == d: зона = весь экран, playable-вертикаль = 2*BASE_D
 }
@@ -2634,7 +2660,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-4";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-5";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
