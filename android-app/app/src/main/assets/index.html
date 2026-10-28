@@ -21,7 +21,7 @@
    неон (циан #00f3ff / маджента #ff00ff / жёлтый #ffee00), глитчи.
    ===================================================================== */
 :root{
-  --bg:#0a0a0a; --cyan:#00f3ff; --magenta:#ff00ff; --yellow:#ffee00;
+  --bg:#121b2b; --cyan:#00f3ff; --magenta:#ff00ff; --yellow:#ffee00;
   --panel:rgba(10,14,18,.88); --line:rgba(0,243,255,.35);
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -116,11 +116,16 @@ h1.logo span{color:var(--magenta);text-shadow:0 0 14px var(--magenta)}
 }
 body.shake #scene{animation:shk .45s linear}
 @keyframes shk{0%,100%{transform:none}20%{transform:translate(-6px,4px)}40%{transform:translate(5px,-5px)}60%{transform:translate(-4px,-3px)}80%{transform:translate(4px,3px)}}
-/* сканлайны поверх всего */
+/* сканлайны поверх всего — v4.2: едва заметные, не накладывают тёмные полосы */
 #crt{position:fixed;inset:0;z-index:30;pointer-events:none;mix-blend-mode:overlay;
-  background:repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px);opacity:.5}
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,.10) 0 1px, transparent 1px 3px);opacity:.25}
+/* v4.2: виньетка ослаблена + мягкие циан/пурпур неоновые свечения по краям (ночной мегаполис) */
 #vig{position:fixed;inset:0;z-index:29;pointer-events:none;
-  background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%)}
+  background:radial-gradient(ellipse at center, transparent 68%, rgba(4,8,16,.28) 100%),
+    radial-gradient(ellipse 70% 45% at 0% 100%, rgba(0,243,255,.14), transparent 60%),
+    radial-gradient(ellipse 70% 45% at 100% 0%, rgba(255,0,255,.12), transparent 60%),
+    radial-gradient(ellipse 55% 35% at 100% 100%, rgba(0,243,255,.07), transparent 65%),
+    radial-gradient(ellipse 55% 35% at 0% 0%, rgba(255,0,255,.07), transparent 65%)}
 #flash{position:fixed;inset:0;z-index:31;pointer-events:none;background:#fff;opacity:0}
 .toast{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:25;
   font-family:'Orbitron';font-size:13px;letter-spacing:2px;padding:8px 20px;color:var(--yellow);
@@ -1013,7 +1018,7 @@ function musicStop(fade){
 }
 /* ================= [6] 3D-СЦЕНА THREE.JS ================= */
 const COLORS={
-  bg:0x0a0a0a,cyan:0x00f3ff,magenta:0xff00ff,yellow:0xffee00,
+  bg:0x121b2b,cyan:0x00f3ff,magenta:0xff00ff,yellow:0xffee00,
   tileTop:0x2b3442,tileSide:0x161c26,
   nums:[0x00f3ff,0x3dff8a,0xffee00,0xff9d00,0xff00ff,0x7df9ff,0xffffff,0xff2d55]
 };
@@ -1021,7 +1026,7 @@ const App={
   renderer:null,scene:null,camera:null,raycaster:new THREE.Raycaster(),
   pointerNdc:new THREE.Vector2(),
   tiles:null,flags:null,fuses:null,glows:null,board:null,plate:null,
-  numbers:[],particles:null,pGeo:null,pMat:null,
+  numbers:[],numMap:new Map(),particles:null,pGeo:null,pMat:null, // v4.2: numMap — Map(id->mesh цифры) для инкрементального обновления без мигания
   W:0,H:0,SZ:1,game:null,state:'MENU',
   /* v2.7 FINAL: ФИКС «ВИД СБОКУ» — ПРИЧИНА НАЙДЕНА ТОЧНО.
      Численная эмуляция lookAt three.js r128 (world-up=(0,1,0)):
@@ -1092,7 +1097,7 @@ addEventListener('resize',()=>layout());
 function initScene(){
   App.scene=new THREE.Scene();
   App.scene.background=new THREE.Color(COLORS.bg);
-  App.scene.fog=new THREE.FogExp2(COLORS.bg,0.018);
+  App.scene.fog=new THREE.FogExp2(COLORS.bg,0.008); // v4.2: туман разрежен — не затемняет поле, цвет = новому фону
   App.camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,300);
   App.renderer=new THREE.WebGLRenderer({antialias:S.quality,powerPreference:'high-performance'});
   App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));
@@ -1114,8 +1119,8 @@ function initScene(){
      углом и они выглядели темнее плиты. Свет переведён в ЗЕНИТ (прямо над
      полем): верхние грани закрытых кубов и пластины открытых получают ровно
      одинаковое освещение, разница читается только по цвету (индиго/графит). */
-  App.scene.add(new THREE.AmbientLight(0x3d5260,1.35)); // ровный заполняющий свет
-  const dl=new THREE.DirectionalLight(0xbfefff,1.15);dl.position.set(0.5,20,0.6);App.scene.add(dl);
+  App.scene.add(new THREE.AmbientLight(0x4a627a,1.5)); // v4.2: ровный заполняющий свет чуть ярче и теплее по тону — экран светлее
+  const dl=new THREE.DirectionalLight(0xbfefff,1.2);dl.position.set(0.5,20,0.6);App.scene.add(dl);
   /* Точечные неоны отведены ВЫСОКО (y≈9) и далеко от центра поля — раньше они
      висели прямо над плитками и выбеливали верхние грани скрытых кубов. */
   const l1=new THREE.PointLight(COLORS.cyan,14,60,2);l1.position.set(-14,9,-12);App.scene.add(l1);
@@ -1160,7 +1165,7 @@ function initScene(){
      Металл чуть грубее — верхняя грань (прямой DirectionalLight сверху) и
      боковые грани (заполняющий Ambient + боковые Point'ы cyan/magenta)
      различаются по яркости даже без emissive-хука. */
-  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.5,metalness:0.5});
+  const tileMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.5,metalness:0.5,envMapIntensity:1.0}); // v4.2: лёгкий циан/пурпурный блик через штатные PointLight (без кастомного шейдера)
   App.tileMat=tileMat; // ссылка на материал (для перекраски/отладки)
   /* ФИКС «бесконечная ЗАГРУЗКА ЯДРА»: emissive-хук навешивается ЗДЕСЬ, сразу
      после создания материала (раньше код стоял вне initScene() и падал с
@@ -1364,7 +1369,7 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* v4.1 (ТЗ п.2): палитра «тёмный объёмный металл» — закрытая клетка тёмная,
    но заметно светлее открытой; перепад высот + разное освещение верха/боков
    дают объём. Цифры (неоновые, светлые) на графите открытых клеток читаются. */
-const cHidden=new THREE.Color(0x37485a),cOpen=new THREE.Color(0x0b1118),cHot=new THREE.Color(0x46606f),cDead=new THREE.Color(0x4a101c);
+const cHidden=new THREE.Color(0x536b82),cOpen=new THREE.Color(0x1b2a3d),cHot=new THREE.Color(0x6f8ba3),cDead=new THREE.Color(0x6a1826); // v4.2: светлее, киберпанк-металл (индиго-графит)
 /* ОБЪЁМ КЛЕТОК (ФИНАЛЬНЫЙ ФИКС «поле выглядит пустым, кубов не видно»):
    1) Раньше скрытая клетка была высотой ~App.SZ (0.3 м на больших полях) —
       плоский «блин», перепад с открытой пластиной не читался. Теперь высота
@@ -1581,52 +1586,81 @@ function makeFaceTex(n){
   if(faceCache[key])return faceCache[key];
   const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
   const x=cv.getContext('2d');
-  x.fillStyle='#0a0e16';x.fillRect(0,0,S2,S2);                       // глубокий графит (темнее плитки)
-  x.strokeStyle='rgba(0,243,255,0.55)';x.lineWidth=4;x.strokeRect(6,6,S2-12,S2-12); // неоновая рамка
+  x.fillStyle='#1b2a3d';x.fillRect(0,0,S2,S2);                        // v4.2: фон накладки = цвет открытой клетки (единая пластина, без чужеродной рамки)
   const col=NUM_COLORS[n-1]||'#ffffff';
-  x.font='900 84px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle';
-  x.shadowColor=col;x.shadowBlur=16;
-  x.fillStyle=col;x.fillText(String(n),S2/2,S2/2+4);
-  x.shadowBlur=4;x.fillText(String(n),S2/2,S2/2+4);
+  x.font='900 104px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle'; // v4.2: цифра крупнее внутри текстуры
+  /* ЧЁТКИЙ КОНТУР: тёмная обводка + тонкая белая внутренняя линия — символ
+     читается на любом фоне и при мелком масштабе (28×28). Glow слабый —
+     подчёркивает, а не размывает. */
+  x.lineWidth=7;x.strokeStyle='rgba(4,10,18,0.95)';x.strokeText(String(n),S2/2,S2/2+6);
+  x.lineWidth=2;x.strokeStyle='rgba(255,255,255,0.85)';x.strokeText(String(n),S2/2,S2/2+6);
+  x.shadowColor=col;x.shadowBlur=6;
+  x.fillStyle=col;x.fillText(String(n),S2/2,S2/2+6);
+  x.shadowBlur=0;x.fillText(String(n),S2/2,S2/2+6);
   const t=new THREE.CanvasTexture(cv);           // СВОЙ canvas — GPU не перетирает пиксели
-  t.minFilter=THREE.LinearFilter;t.magFilter=THREE.LinearFilter;t.generateMipmaps=false;
+  t.minFilter=THREE.LinearMipmapLinearFilter;t.magFilter=THREE.LinearFilter; // v4.2: mipmaps + анизотропия — резче при уменьшении на больших полях
+  t.generateMipmaps=true;
+  try{t.anisotropy=App.renderer?App.renderer.capabilities.getMaxAnisotropy():1;}catch(e){}
   if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
   t.needsUpdate=true;
   return faceCache[key]=t;
 }
 let numGeometry=null;
+/* v4.2 (ТЗ п.4): ПЕРЕИСПОЛЬЗУЕМЫЕ материалы цифр (по одному на значение 1..8).
+   Текстуры кэшируются в faceCache, материалы — здесь. dispose() НИКОГДА не
+   вызывается для ресурсов, которые продолжают использоваться другими mesh:
+   раньше clearNumbers() удалял материал каждого экземпляра при пересборке. */
+const numMatCache={};
+function getNumMat(n){
+  if(!numMatCache[n])numMatCache[n]=new THREE.MeshBasicMaterial({map:makeFaceTex(n),toneMapped:false}); // НЕ прозрачный — видно всегда
+  return numMatCache[n];
+}
+/* ПОЛНАЯ очистка — только при перестройке поля (buildBoard) и рестарте. */
 function clearNumbers(){
-  for(const s of App.numbers){
-    App.scene.remove(s);
-    if(s.material&&s.material.dispose)s.material.dispose();
-  }
+  for(const s of App.numbers)App.scene.remove(s); // mesh переиспользуются через Map; ресурсы общи — не dispose
   App.numbers=[];
+  if(App.numMap){for(const m of App.numMap.values())App.scene.remove(m);App.numMap.clear();}
+}
+/* v4.2 (ТЗ п.4, ГЛАВНЫЙ ФИКС МИГАНИЯ): инкрементальное обновление по Map(id->mesh).
+   Раньше updateNumbers() сначала удалял ВСЕ цифры и создавал их заново — при каждом
+   syncTiles() и в каждом onComplete анимации flipIn соседние цифры исчезали/появлялись
+   (мигание на кадр). Теперь: существующие объекты цифр НЕ трогаются вообще; создаётся
+   mesh только для НОВОЙ открытой клетки с числом; удаляется только цифра клетки, которая
+   перестала быть открытой с числом. Клетка без числа mesh не получает. */
+function ensureNumber(id){
+  const g=App.game;if(!g||!App.numMap)return;
+  const v=g.grid[id];
+  const shouldShow=(g.state[id]===1&&v>0);
+  const has=App.numMap.has(id);
+  if(shouldShow===has)return;                    // состояние отображения не менялось — ничего не делаем (без пересоздания)
+  if(shouldShow){
+    if(!numGeometry||numGeometry.userData.sz!==App.SZ){
+      if(numGeometry)numGeometry.dispose();
+      numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);
+      numGeometry.userData={sz:App.SZ};
+      for(const m of App.numMap.values())m.geometry=numGeometry; // старые mesh переводим на новую геометрию
+    }
+    const sp=new THREE.Mesh(numGeometry,getNumMat(v));
+    const p=cellPos(id);
+    /* Накладка лежит НА тонкой пластине открытой клетки, запас против z-fighting. */
+    sp.position.set(p.x,TOP_OPEN+openThick()*0.55+0.02,p.z);
+    sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);
+    sp.renderOrder=999;sp.frustumCulled=false;
+    App.scene.add(sp);App.numMap.set(id,sp);
+  }else{
+    const sp=App.numMap.get(id);
+    App.scene.remove(sp);App.numMap.delete(id);
+  }
 }
 function updateNumbers(){
-  clearNumbers();
   const g=App.game;if(!g)return;
-  /* ФИКС «цифры не появляются после аккорда»: плоскость-накладка цифры
-     была размером 1 МЕТР при клетке ~0.1–0.4 м — на больших полях цифра
-     проваливалась внутрь плитки/под соседние кубы. Геометрия теперь
-     пересобирается под текущий App.SZ при каждом изменении размера поля. */
-  if(!numGeometry||numGeometry.userData.sz!==App.SZ){
-    if(numGeometry)numGeometry.dispose();
-    numGeometry=new THREE.PlaneGeometry(1,1);numGeometry.rotateX(-Math.PI/2);
-    numGeometry.userData={sz:App.SZ};
-  }
+  if(!App.numMap)App.numMap=new Map();
+  /* Проверка по изменению: идемпотентный проход — трогает ТОЛЬКО расхождения
+     (например после flood-fill или defeat), уже видимые цифры остаются теми же
+     объектами Three.js без изменения позиции/материала/видимости. */
   for(let id=0;id<g.total;id++){
-    const v=g.grid[id];
-    if(g.state[id]===1&&v>0){
-      const m=new THREE.MeshBasicMaterial({map:makeFaceTex(v),toneMapped:false}); // НЕ прозрачный — видно всегда
-      const sp=new THREE.Mesh(numGeometry,m);
-      const p=cellPos(id);
-      /* Накладка лежит НА тонкой пластине открытой клетки (TILE_OPEN*Sz —
-         верхняя грань), с небольшим запасом против z-fighting. */
-      sp.position.set(p.x,TOP_OPEN+openThick()*0.55+0.02,p.z); // v4.0: выше верха пластины // v2.6: цифры лежат на пластине открытой клетки (вровень с полом)
-      sp.scale.set(App.SZ*0.92,1,App.SZ*0.92);   // совпадает с размером плитки
-      sp.renderOrder=999;sp.frustumCulled=false;
-      App.scene.add(sp);App.numbers.push(sp);
-    }
+    const shouldShow=(g.state[id]===1&&g.grid[id]>0);
+    if(shouldShow!==App.numMap.has(id))ensureNumber(id);
   }
 }
 
@@ -1752,7 +1786,7 @@ const T={
     const done=()=>{delete App.tileAnim[id];setTile(id,TILE_OPEN,1,cOpen);
       App.tiles.instanceMatrix.needsUpdate=true;
       if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
-      if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;updateNumbers();};
+      if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;ensureNumber(id);}; // v4.2 (ТЗ п.4): по завершении анимации обновляется ТОЛЬКО эта клетка — полная пересборка цифр отсюда убрана
     /* v2.6: твин ведёт s от 1 (куб) до 0 (пластина вровень с полом).
        back.out даёт лёгкий «перелёт» вниз/вверх — клетка заметно «утапливается». */
     if(window.gsap)gsap.to(a,{s:0,duration:0.42,delay,ease:'power2.inOut',onComplete:done});
@@ -2660,7 +2694,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-5";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-6";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
