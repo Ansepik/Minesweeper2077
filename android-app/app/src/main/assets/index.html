@@ -1637,7 +1637,16 @@ function finishInst(mesh){
    взгляда: 1 cyan → 2 green → 3 red → 4 dark blue → 5 dark red/orange →
    6 teal → 7 white → 8 gray. Значения подобраны под тёмный графит пластины
    (#30445c): все восемь различимы и не сливаются друг с другом. */
-const NUM_COLORS=['#00f3ff','#3dff8a','#ff3b3b','#4d7cff','#ff5a2b','#00e0c6','#ffffff','#9aa7b4'];
+const NUM_COLORS=[
+  '#00FFFF', // 1 — яркий циан
+  '#55FF55', // 2 — кислотно-зелёный
+  '#FF334F', // 3 — насыщенный красный
+  '#66A3FF', // 4 — электрический синий
+  '#FF8A24', // 5 — яркий оранжевый
+  '#00FFE1', // 6 — бирюзовый
+  '#FFFFFF', // 7 — белый
+  '#E0E8FF'  // 8 — холодный светлый
+];
 const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas на каждую цифру!)
 /* НОВЫЙ ВИД ЦИФР (фикс «как будто открыто, но цифры нет»): раньше фон
    накладки был цвета самой плитки (#141b26) — цифра визуально «сливалась»
@@ -1656,9 +1665,14 @@ function makeFaceTex(n){
      подчёркивает, а не размывает. */
   x.lineWidth=7;x.strokeStyle='rgba(4,10,18,0.95)';x.strokeText(String(n),S2/2,S2/2+6);
   x.lineWidth=2;x.strokeStyle='rgba(255,255,255,0.85)';x.strokeText(String(n),S2/2,S2/2+6);
-  x.shadowColor=col;x.shadowBlur=6;
-  x.fillStyle=col;x.fillText(String(n),S2/2,S2/2+6);
-  x.shadowBlur=0;x.fillText(String(n),S2/2,S2/2+6);
+  // Яркое неоновое свечение с чётким контуром символа.
+  x.shadowColor=col;
+  x.shadowBlur=12;
+  x.fillStyle=col;
+  x.fillText(String(n),S2/2,S2/2+6);
+
+  x.shadowBlur=0;
+  x.fillText(String(n),S2/2,S2/2+6);
   const t=new THREE.CanvasTexture(cv);           // СВОЙ canvas — GPU не перетирает пиксели
   t.minFilter=THREE.LinearMipmapLinearFilter;t.magFilter=THREE.LinearFilter; // v4.2: mipmaps + анизотропия — резче при уменьшении на больших полях
   t.generateMipmaps=true;
@@ -2008,7 +2022,7 @@ function clampPan(){
   const asp=Math.max(innerWidth/Math.max(1,innerHeight),0.35);
   /* v2.9: камера ОРТОГРАФИЧЕСКАЯ по умолчанию — видимая зона = dd×dd*asp
      (dd=max(6,camDist*0.62)), а не перспективный tan(fov). */
-  const dd=Math.max(6,App.camDist);
+  const dd=Math.max(0.8,App.camDist);
   const visH=2*dd, visW=2*dd*asp;
   /* v2.7: при наклоне камеры мировая глубина Z проецируется на экранную
      вертикаль с множителем cos(el) — поле «умещается» раньше, граница
@@ -2034,7 +2048,10 @@ function panBy(dx,dy){
   /* v3.5: az=+π/2 → экранное «вправо» = мировой +X, «вниз» = мировой +Z.
      Жест «за хват»: тянем вправо/вниз — поле следует за пальцем => target
      движется ПРОТИВ пальца (−dx, −dy). */
-  App.target.x+=dx*k;App.target.z+=dy*k; // v3.6: az=-pi/2 => экр. «вправо»=мировой -X (target.x двигается ВМЕСТЕ с dx), экр. «вниз»=мировой +Z (target.z ВМЕСТЕ с dy) — жест «за хват»: поле следует за пальцем
+  // Инвертированное направление панорамирования.
+    // Поле следует за движением пальца или мыши по обеим осям.
+    App.target.x-=dx*k;
+    App.target.z-=dy*k;
   clampPan();applyCamera();
 }
 function bindInput(){
@@ -2057,7 +2074,10 @@ function bindInput(){
     /* v2.8: зум орто-камеры = изменение размера видимой зоны (dd=camDist*0.62),
        а НЕ высоты камеры: раньше camDist улетал до 120, dd≈74 м — поле
      становилось крошечным, закрытые кубы (0.2 м) сливались с плитой. */
-    App.camDist=Math.max(4,App.camDist*(e.deltaY>0?1.08:0.93));applyCamera();
+    // Плавный мультипликативный зум без прежнего ограничения min=4.
+    const zf=Math.exp(e.deltaY*0.001);
+    App.camDist=Math.max(0.8,Math.min(1000,App.camDist*zf));
+    applyCamera();
   },{passive:true});
   /* Панорама мышью: тянем зажатой ЛКМ в любом месте (если движение > порога —
      это drag, а не тап; onUp проверяет Cam.moved/wasDrag как раньше). */
@@ -2161,7 +2181,12 @@ addEventListener('touchmove',e=>{
     const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
     /* v2.8: щипок — множительный зум орто-окна (не линейная подстройка
        высоты камеры): 70 → 58 максимум, чтобы поле не «улетало» от камеры. */
-    App.camDist=Math.max(4,App.camDist*(1-(d-pinchD)*0.004));pinchD=d;applyCamera();
+    // Разведение пальцев приближает поле, сведение отдаляет.
+    if(pinchD>0&&d>0){
+      App.camDist=Math.max(0.8,Math.min(1000,App.camDist*(pinchD/d)));
+    }
+    pinchD=d;
+    applyCamera();
   }
 },{passive:true});
 
@@ -2681,7 +2706,7 @@ function fitCamera(){
   App.camDist=dd;  // camDist == d: зона = весь экран, playable-вертикаль = 2*BASE_D
 }
 function makeOrtho(){
-  const d=Math.max(6,App.camDist);
+  const d=Math.max(0.8,App.camDist);
   const asp=innerWidth/innerHeight;
   const c=new THREE.OrthographicCamera(-d*asp,d*asp,d,-d,0.1,Math.max(300,d*4));
   c.position.copy(App.camera.position);
@@ -2710,7 +2735,7 @@ function applyCamera(){
     // а fitCamera закладывал размер поля прямо в camDist (без инверсии 0.62).
     // Итог: доска занимала ~62% экрана (на десктопе и того меньше по горизонтали) —
     // клетки сжимались в точки, цифры (размером с клетку) не читались.
-    const d = Math.max(6, dist);
+    const d = Math.max(0.8, dist);
     const asp = innerWidth / innerHeight;
 
     App.camera.position.set(
@@ -2772,7 +2797,7 @@ function layout(){
   if(!App.renderer)return;
   App.renderer.setSize(W,H);
   if(App.camera.isOrthographicCamera){
-    const d=Math.max(6,App.camDist),asp=W/H; // v3.8: синхронно с applyCamera (без множителя 0.62 — иначе поле не растянуто на весь экран)
+    const d=Math.max(0.8,App.camDist),asp=W/H; // v3.8: синхронно с applyCamera (без множителя 0.62 — иначе поле не растянуто на весь экран)
     App.camera.left=-d*asp;App.camera.right=d*asp;App.camera.top=d;App.camera.bottom=-d;
     App.camera.updateProjectionMatrix();
   }else{App.camera.aspect=W/H;App.camera.updateProjectionMatrix();}
@@ -2785,7 +2810,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-8";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-9";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
