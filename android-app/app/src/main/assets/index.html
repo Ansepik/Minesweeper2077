@@ -886,7 +886,7 @@ const CAMPAIGN_DATA=(()=>{try{return JSON.parse(CAMPAIGN_JSON);}catch(e){return 
    плейлиста и старт musicStart() запускал playTrackAt(MUSIC.idx) — игрок
    мог годами слышать «не ту» первую песню, как бы ни был настроен TRACKS. */
 const Store={
-  key:"cybersweep_save_v21", // v3.8: сброс настроек — новый базис камеры (az=+pi/2, строгий top-down, окно без 0.62)
+  key:"cybersweep_save_v22", // v4.3 (visual-fix-7): сброс старых настроек под новую палитру/ввод
   def(){return {level:1,maxUnlocked:1,wins:0,losses:0,totalTime:0,best:{},attemptsByLevel:{},settings:{sfx:true,music:true,glow:true,quality:true,perspective:false,tracks:{moonlight:true,tori:true,mozart:true,rucksack:true}}};},
   load(){
     try{
@@ -1081,7 +1081,13 @@ const App={
      Пишется ТОЛЬКО GSAP-твинами (flipIn/уровневая волна), читается каждый
      кадр в renderLoop через applyTileAnim(). syncTiles() этот канал НЕ
      трогает — базовые матрицы остаются стабильными. */
-  tileAnim:{}
+  tileAnim:{},
+  /* v4.4 (ТЗ п.1): очередь «дожидаться» анимации открытия. Клетки, которые
+     уже стали открытыми (g.state[id]===1), но ещё НЕ доехали до пластины.
+     syncTiles обязан оставлять их визуальное состояние неизменным, пока твин
+     активен — иначе на клетку надстраивается второй куб и она выглядит так,
+     будто «не открылась». */
+  pendingRevealed:new Set()
 };
 
 /* Инстанс-меши создаются ОДИН раз с запасом под максимальное поле
@@ -1100,7 +1106,7 @@ function initScene(){
   App.scene.fog=new THREE.FogExp2(COLORS.bg,0.008); // v4.2: туман разрежен — не затемняет поле, цвет = новому фону
   App.camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,300);
   App.renderer=new THREE.WebGLRenderer({antialias:S.quality,powerPreference:'high-performance'});
-  App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));
+  const _PR=Math.min(devicePixelRatio||1,(S.quality?1.5:1.25));App.renderer.setPixelRatio(_PR);
   App.renderer.setSize(innerWidth,innerHeight);
   document.getElementById('scene').appendChild(App.renderer.domElement);
 
@@ -1305,6 +1311,21 @@ function tileGeom(fy){
   const h=openThick();                      // тонкая пластина, верх вровень с полом
   return [h,FLOOR_Y-h*0.5];
 }
+/* v4.3 (ТЗ п.5): базовая матрица клетки — единый источник для setTile и
+   анимационного слоя applyTileAnim. Раньше твин писал промежуточные матрицы
+   напрямую в инстанс, а syncTiles мог перезаписать их базовой — возникали
+   конфликты («клетка на кадр вернулась к закрытой», мерцание). Теперь:
+   - flipIn() ставит ТОЛЬКО базовое состояние OPEN (куб больше не «поднимается»
+     твином обратно), твин ведёт визуальное сжатие по высоте от 1 до 0;
+   - applyTileAnim пересобирает матрицу из той же tileGeom(), домножая Y-масштаб
+     на прогресс анимации — при s=1 матрица побитово равна базовой setTile. */
+function tileBaseM(id,fy,out){
+  const p=cellPos(id);
+  const [h,cy]=tileGeom(fy);
+  _v.set(p.x,cy,p.z);_e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92,h,App.SZ*0.92);
+  out.compose(_v,_q,_s);
+  return out;
+}
 function setTile(id,flipY,scaleY,color){
   /* ===== v2.6 «ПЛОСКОЕ ПОЛЕ СВЕРХУ» =====
      Состояние клетки задаётся ОДНОЙ матрицей (высота/центр из tileGeom) и
@@ -1322,20 +1343,17 @@ function setTile(id,flipY,scaleY,color){
 }
 /* Пересчёт позиции/масштаба инстанса ПОСЛЕ применения анимационного
    scale.y из твина. Вызывается каждый кадр из loop(). */
+const _bm=new THREE.Matrix4();
 function applyTileAnim(id){
   const a=App.tileAnim[id];if(!a)return;
-  const p=cellPos(id);
-  /* v3.9: анимация открытия/пред-анимация старта. Нижняя грань блока
-     неподвижна на уровне дна клетки (y=0), верх интерполируется между
-     topHid() (куб) и FLOOR_Y (пластина вровень с полом). */
-  const hidden=a.o===1;
-  const hFull=hidden?topHid():FLOOR_Y;             // целевая высота верха
-  const hStart=hidden?FLOOR_Y:topHid();            // стартовая высота верха
-  const h=Math.max(hFull+(hStart-hFull)*(1-a.s),0.001);
-  _v.set(p.x,h*0.5,p.z);                           // низ на y=0
-  _e.set(0,0,0);_q.setFromEuler(_e);_s.set(App.SZ*0.92,h,App.SZ*0.92);
-  _m.compose(_v,_q,_s);
-  App.tiles.setMatrixAt(id,_m);
+  /* v4.3 (ТЗ п.5): анимация больше НЕ «поднимает» куб и не конфликтует с
+     syncTiles: базовое состояние клетки уже ЗАПИСАНО в setTile (OPEN при
+     старте flipIn), твин ведёт только визуальное сжатие по высоте от 1 до 0.
+     При s=1 матрица побитово совпадает с базовой — промежуточных «возвратов
+     к закрытому виду» невозможны. o===1 — обратная анимация (старт уровня). */
+  tileBaseM(id,a.o===1?TILE_HIDDEN:TILE_OPEN,_bm);
+  if(a.s!==1)_bm.scale(_s.set(1,Math.max(a.s,0.001),1)); // scale.y *= прогресс
+  App.tiles.setMatrixAt(id,_bm);
 }
 function setDeco(mesh,id,on,lift,color,scl){
   const p=cellPos(id);
@@ -1369,7 +1387,22 @@ function setDeco(mesh,id,on,lift,color,scl){
 /* v4.1 (ТЗ п.2): палитра «тёмный объёмный металл» — закрытая клетка тёмная,
    но заметно светлее открытой; перепад высот + разное освещение верха/боков
    дают объём. Цифры (неоновые, светлые) на графите открытых клеток читаются. */
-const cHidden=new THREE.Color(0x536b82),cOpen=new THREE.Color(0x1b2a3d),cHot=new THREE.Color(0x6f8ba3),cDead=new THREE.Color(0x6a1826); // v4.2: светлее, киберпанк-металл (индиго-графит)
+/* v4.3 (visual-fix-7, ТЗ п.3): закрытые — светлый холодный металлический индиго
+   #718ba5; открытые — заметный графитово-синий #30445c (светлее прежнего почти
+   чёрного, но темнее цифр и темнее закрытых — состояния различимы и по цвету,
+   и по высоте); hover — ещё светлее; проигрыш — тёмная малина. */
+/* v4.4 (ТЗ п.4): ЕДИНАЯ ПАЛИТРА ЦВЕТОВ КЛЕТОК — константы, а не «на глаз».
+   Порядок на поле строго читается: тёмная пластина (открыта) → светлый куб
+   (закрыта) → ещё более светлый куб (подсветка/peek) → тёмно-малиновый
+   (мина). Соседние состояния различаются и по яркости, и по высоте. */
+const TILE_COLORS={
+  open:0x30445c,      // открытая клетка: тёмный графит (пластина вровень с полом)
+  hidden:0x718ba5,    // закрытая клетка: светлый стальной куб (заметно выше открытой)
+  highlight:0xbdd4e8, // подсветка peek/наведения: самый светлый куб — явно отличается от обычного
+  mine:0x6a1826,      // мина после поражения: тёмно-малиновый
+  exploded:0xff2d55   // взорвавшаяся мина: ядовито-алый
+};
+const cHidden=new THREE.Color(TILE_COLORS.hidden),cOpen=new THREE.Color(TILE_COLORS.open),cHot=new THREE.Color(TILE_COLORS.highlight),cDead=new THREE.Color(TILE_COLORS.mine);
 /* ОБЪЁМ КЛЕТОК (ФИНАЛЬНЫЙ ФИКС «поле выглядит пустым, кубов не видно»):
    1) Раньше скрытая клетка была высотой ~App.SZ (0.3 м на больших полях) —
       плоский «блин», перепад с открытой пластиной не читался. Теперь высота
@@ -1496,7 +1529,30 @@ function syncTiles(idsChanged){
   if(!Number.isFinite(App.SZ)||App.SZ<=0)
     if(!App.SZ||!isFinite(App.SZ))App.SZ=calcSZ(App.game.w,App.game.h); // v4.0: SZ НЕ сбрасывается в syncTiles — только аварийное восстановление
   const g=App.game;
-  for(let id=0;id<g.total;id++){
+  App._prev=App._prev||[];
+  /* v4.4 (ТЗ п.1): клетки, чья анимация открытия ЕЩЁ идёт, исключаются из
+     пакета изменений: их визуальное состояние остаётся прежним до конца
+     твина. Раньше такие id попадали в changed и перекрашивались/опускались
+     СРАЗУ — на анимируемую плитку надстраивалась вторая («клетка не
+     открывается», «два куба вместо одного»). */
+  if(App.pendingRevealed&&App.pendingRevealed.size){
+    if(idsChanged)idsChanged=idsChanged.filter(id=>!App.pendingRevealed.has(id));
+  }
+  /* v4.3 (ТЗ п.2): пакетное обновление ТОЛЬКО изменившихся клеток. Список id
+     считается сравнением предыдущего и нового состояния (или берётся из
+     idsChanged). GPU-атрибуты обновляются ОДИН раз за операцию; если изменений
+     нет — early return без пересылки неизменённых буферов на GPU. При смене
+     размера поля (buildBoard) снапшот пуст -> полный проход один раз. */
+  let changed;
+  if(idsChanged&&idsChanged.length){changed=idsChanged.slice();for(const id of idsChanged)App._prev[id]=g.state[id];}
+  else{
+    changed=[];
+    for(let id=0;id<g.total;id++){const st=g.state[id];if(App._prev[id]!==st){App._prev[id]=st;if(!(App.pendingRevealed&&App.pendingRevealed.has(id)))changed.push(id);}}
+  }
+  if(!changed.length)return;
+  for(let ci=0;ci<changed.length;ci++){
+    const id=changed[ci];
+    if(id>=g.total)continue;
     const st=g.state[id];
     let col,fy;
     if(st===1){col=cOpen;fy=TILE_OPEN;}
@@ -1510,18 +1566,19 @@ function syncTiles(idsChanged){
     /* ПОРАЖЕНИЕ: все мины подсвечиваются ТЁМНО-МАЛИНОВЫМ и остаются ПОВЫШЕННЫМИ
        (не «открытыми»): игрок сразу видит, где были бомбы. Взорвавшаяся — ядовито-алая. */
     if(g.dead&&g.grid[id]===-1){if(st!==2)col=g.exploded===id?new THREE.Color(0xff2d55):new THREE.Color(0x50121c);fy=TILE_HIDDEN;}
-    /* ФИКС «цифры не появляются после аккорда»: та же причина, что и с
-       невидимыми бомбами — сетка цифр-накладок рисовалась на плоскости
-       РАЗМЕРОМ 1 МЕТР, а клетки на больших полях ~0.1–0.4 м; накладка
-       «проваливалась» внутрь плитки и цифры тонули под соседними кубами.
-       Геометрия цифр теперь масштабируется под App.SZ в setMatrixAt. */
     setTile(id,fy,1,col);
   }
   App.tiles.instanceMatrix.needsUpdate=true;
   if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
   if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
 
-  // флаги / подсветка
+  // флаги / подсветка: v4.3 (ТЗ п.2) — метки это ДЕКОР, их полный пересчёт
+  // нужен только при изменении множества флагов/peek (doFlag, peek, defeat,
+  // старт поля). При обычном открытии клеток (состояния hidden->open) список
+  // меток не меняется — пропускаем второй полный проход по полю целиком.
+  const flagsChanged=!idsChanged||App._forceDeco===true||(g.dead&&!App._decoDead)||!!App.peekIds!==!!App._hadPeek;
+  App._forceDeco=false;App._hadPeek=!!App.peekIds;if(g.dead)App._decoDead=true;
+  if(flagsChanged){
   App.flags._n=0;App.glows._n=0;App.fuses._n=0;App.rings._n=0;
   for(let id=0;id<g.total;id++){
     // ВАЖНО: раньше маркер-бомба рисовался ТОЛЬКО для state===2, а при
@@ -1558,7 +1615,8 @@ function syncTiles(idsChanged){
     if(App.peekIds&&App.peekIds.includes(id)&&g.state[id]===0)setDeco(App.glows,id,true,-STEP_LIFT*0.4,new THREE.Color(COLORS.cyan),1.05); // v3.9: подсветка — у середины куба
   }
   finishInst(App.flags);finishInst(App.glows);finishInst(App.fuses);finishInst(App.rings);
-  updateNumbers();
+  } // if(flagsChanged)
+  updateNumbers(changed);
 }
 function finishInst(mesh){
   const off=new THREE.Matrix4().makeScale(0.0001,0.0001,0.0001);
@@ -1575,7 +1633,11 @@ function finishInst(mesh){
    каждой открытой цифры создаётся своя непрозрачная плоская плитка с
    canvas-текстурой (цифра + фон цвета открытой клетки), поднятая на 0.02
    над основной плиткой — запаяно видима всегда, пока клетка открыта. */
-const NUM_COLORS=['#00f3ff','#3dff8a','#ffee00','#ff9d00','#ff00ff','#7df9ff','#ffffff','#ff2d55'];
+/* v4.4 (ТЗ п.4): ЕДИНАЯ ПАЛИТРА ЦИФР — константы, порядок читается с первого
+   взгляда: 1 cyan → 2 green → 3 red → 4 dark blue → 5 dark red/orange →
+   6 teal → 7 white → 8 gray. Значения подобраны под тёмный графит пластины
+   (#30445c): все восемь различимы и не сливаются друг с другом. */
+const NUM_COLORS=['#00f3ff','#3dff8a','#ff3b3b','#4d7cff','#ff5a2b','#00e0c6','#ffffff','#9aa7b4'];
 const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas на каждую цифру!)
 /* НОВЫЙ ВИД ЦИФР (фикс «как будто открыто, но цифры нет»): раньше фон
    накладки был цвета самой плитки (#141b26) — цифра визуально «сливалась»
@@ -1586,7 +1648,7 @@ function makeFaceTex(n){
   if(faceCache[key])return faceCache[key];
   const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
   const x=cv.getContext('2d');
-  x.fillStyle='#1b2a3d';x.fillRect(0,0,S2,S2);                        // v4.2: фон накладки = цвет открытой клетки (единая пластина, без чужеродной рамки)
+  x.fillStyle='#30445c';x.fillRect(0,0,S2,S2);                        // v4.3: фон накладки = новый цвет открытой клетки (ТЗ п.4: контраст яркой цифры к графиту #30445c)
   const col=NUM_COLORS[n-1]||'#ffffff';
   x.font='900 104px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle'; // v4.2: цифра крупнее внутри текстуры
   /* ЧЁТКИЙ КОНТУР: тёмная обводка + тонкая белая внутренняя линия — символ
@@ -1652,12 +1714,15 @@ function ensureNumber(id){
     App.scene.remove(sp);App.numMap.delete(id);
   }
 }
-function updateNumbers(){
+function updateNumbers(changedIds){
   const g=App.game;if(!g)return;
   if(!App.numMap)App.numMap=new Map();
-  /* Проверка по изменению: идемпотентный проход — трогает ТОЛЬКО расхождения
-     (например после flood-fill или defeat), уже видимые цифры остаются теми же
-     объектами Three.js без изменения позиции/материала/видимости. */
+  /* v4.3 (ТЗ п.2): сверка ТОЛЬКО по изменившимся id (список передаёт syncTiles).
+     Уже видимые цифры остаются теми же объектами Three.js без изменения
+     позиции/материала/видимости. При открытии одной клетки посещается одна id —
+     полный проход по полю удалён. Клетка без числа mesh не получает. */
+  const list=(changedIds&&changedIds.length)?changedIds:null;
+  if(list){for(const id of list){const sp=App.numMap.get(id);const shouldShow=(g.state[id]===1&&g.grid[id]>0);if(shouldShow!==(sp!==undefined))ensureNumber(id);}return;}
   for(let id=0;id<g.total;id++){
     const shouldShow=(g.state[id]===1&&g.grid[id]>0);
     if(shouldShow!==App.numMap.has(id))ensureNumber(id);
@@ -1720,6 +1785,7 @@ function calcSZ(w,h){
 }
 function buildBoard(){
   clearNumbers();
+  App._prev=[];App._forceDeco=true; // v4.3 (ТЗ п.2): снапшот состояний пуст -> syncTiles сделает единственный полный проход под новое поле
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
   /* v4.0 (ТЗ п.3): шаг сетки подгоняется ПОД РЕАЛЬНЫЙ ЭКРАН. Орто-зона = 2*d*asp (X) x 2*d (Z),
@@ -1775,15 +1841,26 @@ const T={
      атрибут цвета). Теперь при завершении твина плитка перекрашивается в
      явный открытый цвет и цвета инстансов принудительно обновляются. */
   flipIn(id,delay){
+    /* v4.3 (ТЗ п.5): повторный вызов для уже открытой клетки НЕ запускает
+       конкурирующую анимацию; если твин ещё идёт — не пересоздаём его. */
+    if(App.tileAnim[id])return;
+    const g=App.game;if(!g||g.state[id]!==1)return;
     /* ФИКС «закрытые клетки исчезают/не видны» (архитектурный): твин больше
        НЕ пишет промежуточные матрицы через setTile — он обновляет только
        App.tileAnim[id].s, а renderLoop переносит масштаб в инстанс. Базовая
        матрица (установленная syncTiles/setTile) остаётся нетронутой, поэтому
        никакое внешнее событие (флаг, peek, взрыв) не может «отменить» анимацию
        и тем более обнулить плитку. */
-    const a=(App.tileAnim[id]=App.tileAnim[id]||{s:1,o:0});
-    a.o=0; // цель — ОТКРЫТАЯ пластина; старт s=1 = полная высота куба (см. applyTileAnim)
-    const done=()=>{delete App.tileAnim[id];setTile(id,TILE_OPEN,1,cOpen);
+    /* v4.4 (ТЗ п.1, ФИКС «клетка не открывается / два куба вместо одного»):
+       клетка добавляется в pendingRevealed ДО любых записей матрицы — syncTiles
+       и все внешние redraw-события (флаг, peek, chord) обязаны оставить её в
+       покое, пока твин активен. Стартовый вид — ПОЛНЫЙ куб; цифра скрывается
+       и возвращается только в done(), когда плитка легла плашмя. */
+    App.pendingRevealed.add(id);
+    setTile(id,TILE_HIDDEN,1,cHidden);
+    const sp=App.numMap&&App.numMap.get(id);if(sp)sp.visible=false;
+    const a=(App.tileAnim[id]={s:1,o:0});
+    const done=()=>{delete App.tileAnim[id];App.pendingRevealed.delete(id);setTile(id,TILE_OPEN,1,cOpen);
       App.tiles.instanceMatrix.needsUpdate=true;
       if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
       if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;ensureNumber(id);}; // v4.2 (ТЗ п.4): по завершении анимации обновляется ТОЛЬКО эта клетка — полная пересборка цифр отсюда убрана
@@ -1879,20 +1956,32 @@ window.__resumeRendering=resumeRendering;
 /* ================= [7] УПРАВЛЕНИЕ ================= */
 function pickCell(ev){
   if(!App.game)return -1;
+  /* v4.3 (ТЗ п.1, ГЛАВНЫЙ ФИКС «клетки не реагируют на касание / жмутся не
+     туда»): раньше определение шло через raycaster.intersectObject(InstancedMesh),
+     а перед ним стоял сброс App.tiles.geometry.boundingSphere=null. В three.js
+     r128 InstancedMesh.computeBoundingSphere() описывает сферу ТОЛЬКО вокруг
+     БАЗОВОЙ геометрии в начале координат (первый инстанс) и НЕ учитывает
+     instance-матрицы; рейкаст сначала проверяет именно эту сферу — клетки
+     дальше ~радиуса базового куба становились недоступны для тапа, а на больших
+     полях терялась вся периферия. Теперь попадание считается АНАЛИТИЧЕСКИ:
+     луч камеры пересекаем с плоскостью пола поля (y=FLOOR_Y) и переводим точку
+     пересечения в координаты сетки. Панорама/зум учтены камерой автоматически
+     (setFromCamera работает от фактических matrixWorld/projectionMatrix). */
   const r=App.renderer.domElement.getBoundingClientRect();
   App.pointerNdc.x=((ev.clientX-r.left)/r.width)*2-1;
   App.pointerNdc.y=-((ev.clientY-r.top)/r.height)*2+1;
   App.raycaster.setFromCamera(App.pointerNdc,App.camera);
-  /* ФИКС «клик мимо / не попадал по кубам»: для InstancedMesh рейкаст в r128
-     сначала проверяет bounding sphere МЕША — она была выставлена вручную на
-     радиус 1e4 и на больших полях давала ложные «хиты» по несуществующим
-     клеткам. Теперь sphere отключена, а проверка границ выполняется явно по
-     instanceId (< total). */
-  App.tiles.geometry.boundingSphere=null;
-  const hits=App.raycaster.intersectObject(App.tiles,false);
-  if(!hits.length)return -1;
-  const id=hits[0].instanceId;
-  return id<App.game.total?id:-1;
+  const ray=App.raycaster.ray;
+  if(Math.abs(ray.direction.y)<1e-6)return -1;      // луч параллелен полу
+  const t=(FLOOR_Y-ray.origin.y)/ray.direction.y;   // параметр до плоскости поля
+  if(t<=0||!Number.isFinite(t))return -1;           // поле позади камеры
+  const wx=ray.origin.x+ray.direction.x*t;
+  const wz=ray.origin.z+ray.direction.z*t;
+  const col=Math.round(wx/App.SZ+(App.W-1)/2);
+  const row=Math.round(wz/App.SZ+(App.hFix-1)/2);
+  if(col<0||col>=App.W||row<0||row>=App.hFix)return -1;
+  const id=row*App.W+col;
+  return(id>=0&&id<App.game.total)?id:-1;
 }
 
 /* Камера: перетаскивание правой кнопкой/фоном/щипок; ЛКМ по плиткам — игра */
@@ -2087,13 +2176,14 @@ function tryChord(id){
   if(r===null){SFX.error();return false;}
   // флаги, съеденные аккордом, остаются на поле как метки-бомбы
   for(const f of (g._chordFlags||[])){if(App.bombMarks)App.bombMarks.add(f);}
-  /* ФИКС «после аккорда цифры не появляются»: сразу же, не дожидаясь твинов,
-     опускаем и перекрашиваем ВСЕ открытые клетки и обновляем GPU-атрибуты. */
-  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,TILE_OPEN,1,cOpen);
-  App.tiles.instanceMatrix.needsUpdate=true;
-  if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
-  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
-  SFX.chord();animateRevealed(id);refreshHud();checkVictory();
+  /* ФИКС «после аккорда цифры не появляются» (v4.3, ТЗ п.2): полный проход по
+     всему полю заменён на пакетное обновление соседей — их состояния изменил
+     g.chord(); syncTiles() перекрасит/опустит только их и создаст цифры сразу. */
+  syncTiles(ns.slice());
+  /* v4.4 (ТЗ п.1): только НЕ-Aнимированные соседи опускаются сразу; клетки,
+     для которых сейчас идёт твин, redraw не получают (см. pendingRevealed). */
+  ns.forEach((id,i)=>{if(g.state[id]===1&&!App.tileAnim[id])T.flipIn(id,i*0.03);});
+  SFX.chord();refreshHud();checkVictory();
   return true;
 }
 function doReveal(id){
@@ -2104,36 +2194,27 @@ function doReveal(id){
   }
   const r=g.reveal(id);
   if(r==='boom'){onDefeat(id);return;}
+  /* v4.4 (ТЗ п.1): flood() открыл МНОГО клеток, а notify строит список только
+     вокруг одной — остальные оставались кубами цвета открытых («клетки не
+     открываются»). Полный проход syncTiles() здесь обязателен: pendingRevealed
+     защищает анимируемые клетки, поэтому посещаются только реально нужные. */
+  App._pendingFull=true;
   SFX.reveal();
-  /* ФИКС «плитки не прожимаются / цифра не появляется»: как только клетка
-     открыта (state=1), СРАЗУ красим ВСЕ открытые клетки в явный открытый
-     цвет и обновляем GPU-атрибуты — не дожидаясь окончания GSAP-твина. */
-  for(let i=0;i<g.total;i++)if(g.state[i]===1)setTile(i,TILE_OPEN,1,cOpen);
-  App.tiles.instanceMatrix.needsUpdate=true;
-  if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
-  if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   animateRevealed(id);
+  App._pendingFull=false;
   refreshHud();checkVictory();
 }
 function animateRevealed(fromId){
-  // найти newly opened: уже state=1, но мы анимируем все только что открытые —
-  // проще: синхронизируем и делаем волну вокруг fromId
+  /* v4.3 (ТЗ п.2): только список клеток вокруг fromId; полный syncTiles() и
+     отложенная полная перекраска через 900 мс УДАЛЕНЫ — они перебирали всё
+     поле на каждое действие и были источником лагов при нажатии. */
   const g=App.game;
+  /* v4.4 (ТЗ п.1): ЕДИНСТВЕННЫЙ redraw за операцию: сначала syncTiles(...)
+     перекрашивает/опускает НЕ-Aнимируемые клетки, ЗАТЕМ запускаются твины —
+     flipIn добавляет свои id в pendingRevealed и они больше не перетираются. */
   const around=[fromId,...g.nb(fromId)];
-  syncTiles();
-  // ФОНОВЫЙ ДОСИНХРОН: через 0.9с (после завершения всех flipIn) ещё раз
-  // красим ВСЕ открытые клетки в явный цвет открытых + обновляем атрибуты
-  // инстансов. Это гарантирует видимость цифр и меток даже если GSAP-твин
-  // или запись в instanceColor «потерялась» в WebView.
-  clearTimeout(animateRevealed._t);
-  animateRevealed._t=setTimeout(()=>{
-    for(let id=0;id<g.total;id++)if(g.state[id]===1)setTile(id,TILE_OPEN,1,cOpen);
-    App.tiles.instanceMatrix.needsUpdate=true;
-  if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}
-    if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
-    syncTiles();
-  },900);
-  around.forEach((id,i)=>{if(g.state[id]===1)T.flipIn(id,i*0.03);});
+  syncTiles(App._pendingFull?null:around.slice());
+  around.forEach((id,i)=>{if(g.state[id]===1&&!App.tileAnim[id])T.flipIn(id,i*0.03);});
 }
 function doFlag(id){
   const g=App.game;if(!g||g.dead||g.won)return;
@@ -2142,7 +2223,8 @@ function doFlag(id){
   // r===2 — флаг поставили, r===0 — сняли (режима «?» больше нет)
   if(App.bombMarks){r===2?App.bombMarks.add(id):App.bombMarks.delete(id);}
   r===2?SFX.flag():SFX.unflag();
-  syncTiles();refreshHud();checkVictory();
+  App._forceDeco=true; // v4.3 (ТЗ п.2): изменилось множество меток — deco-слой пересобирается, клетки — только [id]
+  syncTiles([id]);refreshHud();checkVictory();
 }
 function doChord(id){tryChord(id);}
 function pulseTile(id){
@@ -2474,7 +2556,7 @@ function bindUI(){
   inst('#btnSfx',()=>{S.sfx=!S.sfx;Store.save();updateSettingsUI();});
   inst('#btnMusic',()=>{S.music=!S.music;Store.save();updateSettingsUI();if(S.music)musicStart();else musicStop(0.2);}); // музыка теперь играет и в меню, и на уровне — переключение действует везде
   inst('#btnGlow',()=>{S.glow=!S.glow;applyGlow();Store.save();updateSettingsUI();});
-  inst('#btnQuality',()=>{S.quality=!S.quality;App.renderer.setPixelRatio(Math.min(devicePixelRatio,S.quality?2:1.25));layout();Store.save();updateSettingsUI();});
+  inst('#btnQuality',()=>{S.quality=!S.quality;const _PR=Math.min(devicePixelRatio||1,(S.quality?1.5:1.25));App.renderer.setPixelRatio(_PR);layout();Store.save();updateSettingsUI();});
   inst('#btnCam',()=>{S.perspective=!S.perspective;toggleProjection();Store.save();updateSettingsUI();});
   addEventListener('keydown',e=>{
     if(e.key==='Escape'){
@@ -2694,7 +2776,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-6";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-7";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
