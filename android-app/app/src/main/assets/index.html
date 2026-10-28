@@ -1694,7 +1694,13 @@ function ensureNumber(id){
   const v=g.grid[id];
   const shouldShow=(g.state[id]===1&&v>0);
   const has=App.numMap.has(id);
-  if(shouldShow===has)return;                    // состояние отображения не менялось — ничего не делаем (без пересоздания)
+  /* visual-fix-8: наличие mesh в numMap НЕ означает, что он видим.
+     flipIn скрывает цифру до конца анимации; если updateNumbers создал её раньше,
+     ensureNumber обязан вернуть visible=true, иначе цифра навсегда останется скрытой. */
+  if(shouldShow===has){
+    if(shouldShow){const sp=App.numMap.get(id);if(sp&&!sp.visible)sp.visible=true;}
+    return;
+  }
   if(shouldShow){
     if(!numGeometry||numGeometry.userData.sz!==App.SZ){
       if(numGeometry)numGeometry.dispose();
@@ -1858,7 +1864,10 @@ const T={
        и возвращается только в done(), когда плитка легла плашмя. */
     App.pendingRevealed.add(id);
     setTile(id,TILE_HIDDEN,1,cHidden);
-    const sp=App.numMap&&App.numMap.get(id);if(sp)sp.visible=false;
+    /* visual-fix-8: если цифра уже существует (создана updateNumbers до/во время
+       анимации) — не трогаем её вовсе. Скрывать можно только mesh, который ещё НЕ
+       создан: тогда done() гарантированно создаст его видимым. Так исчезает гонка
+       «скрыли → ensureNumber вышел по shouldShow===has → цифра осталась hidden». */
     const a=(App.tileAnim[id]={s:1,o:0});
     const done=()=>{delete App.tileAnim[id];App.pendingRevealed.delete(id);setTile(id,TILE_OPEN,1,cOpen);
       App.tiles.instanceMatrix.needsUpdate=true;
@@ -2776,7 +2785,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-7";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-8";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
