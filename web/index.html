@@ -1020,7 +1020,7 @@ function musicStop(fade){
 const COLORS={
   bg:0x121b2b,cyan:0x00f3ff,magenta:0xff00ff,yellow:0xffee00,
   tileTop:0x2b3442,tileSide:0x161c26,
-  nums:[0x00f3ff,0x3dff8a,0xffee00,0xff9d00,0xff00ff,0x7df9ff,0xffffff,0xff2d55]
+  nums:[0x00ffff,0x55ff55,0xff334f,0x66a3ff,0xff8a24,0x00ffe1,0xffffff,0xe0e8ff] // visual-fix-9: синхронно с NUM_COLORS (яркая палитра)
 };
 const App={
   renderer:null,scene:null,camera:null,raycaster:new THREE.Raycaster(),
@@ -1858,6 +1858,11 @@ function calcSZ(w,h){
 }
 function buildBoard(){
   clearNumbers();
+  /* visual-fix-9: добиваем незавершённые твины пульса со СТАРОГО поля —
+     иначе их onComplete перекрасит клетку нового поля (g/state проверены,
+     но на всякий случай убиваем сами твины и скрываем glow-оверлеи). */
+  if(App._pulseTweens){for(const k in App._pulseTweens){try{App._pulseTweens[k].kill();}catch(e){}}App._pulseTweens={};}
+  for(const m of _pulsePool)m.visible=false;
   App._prev=[];App._forceDeco=true; // v4.3 (ТЗ п.2): снапшот состояний пуст -> syncTiles сделает единственный полный проход под новое поле
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
@@ -2314,52 +2319,70 @@ function doFlag(id){
   syncTiles([id]);refreshHud();checkVictory();
 }
 function doChord(id){tryChord(id);}
+/* visual-fix-9 (ТЗ п.3): пульс НЕ должен «закрывать» открытую клетку.
+   Старая версия вызывала setTile(id,TILE_HIDDEN,...) на каждом кадре твина —
+   это перестраивало матрицу инстанса в полный куб, и при любом внешнем событии
+   (peek, chord, syncTiles) клетка могла остаться закрытой визуально, хотя
+   игровое state===1. Теперь матрица вообще не трогаётся: мигает только
+   цвет плитки (instanceColor) + аддитивный glow-оверлей над клеткой. */
+/* Пул активных glow-оверлеев пульса (отдельно от инстансов peek, чтобы
+   syncTiles/finishInst не сбрасывал матрицы во время твина). */
+const _pulseGroup=new THREE.Group();
+const _pulsePool=[];let _pulseIdx=0;let _pulseSceneReady=false;
+const _pc=new THREE.Color(),_flashCol=new THREE.Color(0x00ffff);
+function pulseGlowMesh(){
+  if(!_pulseSceneReady&&App.scene){App.scene.add(_pulseGroup);_pulseSceneReady=true;}
+  if(_pulsePool.length<4){
+    const geo=new THREE.PlaneGeometry(1,1);geo.rotateX(-Math.PI/2);
+    const m=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:COLORS.cyan,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false}));
+    m.frustumCulled=false;m.visible=false;_pulsePool.push(m);_pulseGroup.add(m);
+  }
+  const m=_pulsePool[_pulseIdx%Math.max(1,_pulsePool.length)];_pulseIdx++;return m;
+}
 function pulseTile(id){
   const g=App.game;
   if(!g||g.state[id]!==1||!App.tiles)return;
+  /* Защита от конкурирующих анимаций: повторный пульс по той же клетке
+     просто добивает предыдущий твин и возвращает базовый цвет. */
+  if(window.gsap&&App._pulseTweens&&App._pulseTweens[id])App._pulseTweens[id].kill();
+  App._pulseTweens=App._pulseTweens||{};
 
-  // Подсвечиваем только цвет уже открытой клетки.
-  // Её состояние и высота не меняются.
-  const base=cOpen.clone();
-  const flash=new THREE.Color(0x00ffff);
-
-  const apply=(t)=>{
-    // Не менять поле, если за время анимации началась новая игра
-    // или клетка больше не открыта.
+  const setColor=(t)=>{
+    // Клетка могла закрыться/смениться игра — не красим.
     if(App.game!==g||g.state[id]!==1)return;
-
-    const color=base.clone().lerp(flash,t);
-
-    // TILE_OPEN сохраняет геометрию открытой клетки.
-    setTile(id,TILE_OPEN,1,color);
-
+    _pc.copy(cOpen).lerp(_flashCol,Math.max(0,Math.min(1,t)));
+    /* visual-fix-9: пишем ПОЛНУЮ матрицу открытой клетки (TILE_OPEN) + цвет.
+       Матрица при этом идентична базовой (setTile в syncTiles/done), поэтому
+       клетка визуально НЕ «поднимается» — но любое внешнее событие больше не
+       может оставить её с унаследованным цветом закрытой. */
+    setTile(id,TILE_OPEN,1,_pc);
     App.tiles.instanceMatrix.needsUpdate=true;
-
-    if(App.outlines){
-      App.outlines.instanceMatrix.needsUpdate=true;
-    }
-
-    if(App.tiles.instanceColor){
-      App.tiles.instanceColor.needsUpdate=true;
-    }
+    if(App.outlines)App.outlines.instanceMatrix.needsUpdate=true;
+    if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
   };
 
-  if(window.gsap){
-    const animation={t:0};
+  const sp=pulseGlowMesh();
+  const glowY=topHid()+0.006; // над верхушками кубов — glow виден поверх пластин
+  const p=cellPos(id);
+  const showGlow=(t)=>{
+    sp.visible=true;
+    sp.position.set(p.x,glowY,p.z);
+    sp.scale.set(App.SZ*1.02*(0.8+0.4*t),1,App.SZ*1.02*(0.8+0.4*t));
+  };
+  const hideGlow=()=>{sp.visible=false;};
 
-    gsap.to(animation,{
-      t:1,
-      duration:0.12,
-      repeat:1,
-      yoyo:true,
-      ease:'sine.inOut',
-      onUpdate:()=>apply(animation.t),
-      onComplete:()=>apply(0)
+  if(window.gsap){
+    const o={t:0};
+    const tw=gsap.to(o,{
+      t:1,duration:0.14,yoyo:true,repeat:1,ease:'sine.inOut',
+      onUpdate:()=>{setColor(o.t);showGlow(o.t);},
+      onComplete:()=>{delete App._pulseTweens[id];setColor(0);hideGlow();}
     });
+    App._pulseTweens[id]=tw;
   }else{
-    // Без GSAP не меняем высоту и состояние клетки.
-    apply(0.65);
-    setTimeout(()=>apply(0),160);
+    // Без GSAP: короткий статичный подсвет без изменения геометрии.
+    setColor(0.7);showGlow(0.7);
+    setTimeout(()=>{setColor(0);hideGlow();},180);
   }
 }
 
@@ -2903,7 +2926,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-10";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-9";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
