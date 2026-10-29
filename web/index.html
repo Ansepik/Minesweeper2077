@@ -1544,10 +1544,18 @@ function syncTiles(idsChanged){
      нет — early return без пересылки неизменённых буферов на GPU. При смене
      размера поля (buildBoard) снапшот пуст -> полный проход один раз. */
   let changed;
-  if(idsChanged&&idsChanged.length){changed=idsChanged.slice();for(const id of idsChanged)App._prev[id]=g.state[id];}
+  App._shown=App._shown||[];App._prev=App._prev||[];
+  if(idsChanged&&idsChanged.length){changed=idsChanged.slice();for(const id of idsChanged){App._prev[id]=g.state[id];App._shown[id]=g.state[id];}}
   else{
     changed=[];
-    for(let id=0;id<g.total;id++){const st=g.state[id];if(App._prev[id]!==st){App._prev[id]=st;if(!(App.pendingRevealed&&App.pendingRevealed.has(id)))changed.push(id);}}
+    /* visual-fix-9b: сравнение с ПОСЛЕДНИМ ОТОБРАЖЁННЫМ состоянием (App._shown),
+       а не с игровым. Иначе клетка, открытая во время анимации (pendingRevealed),
+       «теряется»: _prev уже обновлён, но syncTiles её пропустил — при следующем
+       полном проходе она не попадает в changed и остаётся залитой цветом закрытой
+       (жалоба «пустые открытые клетки»). pending-клетки по-прежнему не трогаются,
+       пока идёт твин flipIn. */
+    App._shown=App._shown||[];
+    for(let id=0;id<g.total;id++){const st=g.state[id];if(App._shown[id]!==st){App._shown[id]=st;if(!(App.pendingRevealed&&App.pendingRevealed.has(id)))changed.push(id);}}
   }
   if(!changed.length)return;
   for(let ci=0;ci<changed.length;ci++){
@@ -1863,7 +1871,7 @@ function buildBoard(){
      но на всякий случай убиваем сами твины и скрываем glow-оверлеи). */
   if(App._pulseTweens){for(const k in App._pulseTweens){try{App._pulseTweens[k].kill();}catch(e){}}App._pulseTweens={};}
   for(const m of _pulsePool)m.visible=false;
-  App._prev=[];App._forceDeco=true; // v4.3 (ТЗ п.2): снапшот состояний пуст -> syncTiles сделает единственный полный проход под новое поле
+  App._prev=[];App._shown=[];App._forceDeco=true; // v4.3 (ТЗ п.2): снапшот состояний пуст -> syncTiles сделает единственный полный проход под новое поле
   const g=App.game;App.W=g.w;App.hFix=g.h;
   ensureCapacity(g.total); // мешей должно хватать на все клетки поля
   /* v4.0 (ТЗ п.3): шаг сетки подгоняется ПОД РЕАЛЬНЫЙ ЭКРАН. Орто-зона = 2*d*asp (X) x 2*d (Z),
@@ -2926,7 +2934,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-9";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-9b";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
