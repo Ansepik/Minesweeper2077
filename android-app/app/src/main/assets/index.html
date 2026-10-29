@@ -1654,32 +1654,68 @@ const faceCache={}; // ключ "цифра" -> CanvasTexture (СВОЙ canvas �
    графитовая плашка с неоновой рамкой: цифра читается мгновенно. */
 function makeFaceTex(n){
   const key='n'+n;
-  if(faceCache[key])return faceCache[key];
-  const S2=128,cv=document.createElement('canvas');cv.width=cv.height=S2;
-  const x=cv.getContext('2d');
-  x.fillStyle='#30445c';x.fillRect(0,0,S2,S2);                        // v4.3: фон накладки = новый цвет открытой клетки (ТЗ п.4: контраст яркой цифры к графиту #30445c)
-  const col=NUM_COLORS[n-1]||'#ffffff';
-  x.font='900 104px Orbitron,Rajdhani,sans-serif';x.textAlign='center';x.textBaseline='middle'; // v4.2: цифра крупнее внутри текстуры
-  /* ЧЁТКИЙ КОНТУР: тёмная обводка + тонкая белая внутренняя линия — символ
-     читается на любом фоне и при мелком масштабе (28×28). Glow слабый —
-     подчёркивает, а не размывает. */
-  x.lineWidth=7;x.strokeStyle='rgba(4,10,18,0.95)';x.strokeText(String(n),S2/2,S2/2+6);
-  x.lineWidth=2;x.strokeStyle='rgba(255,255,255,0.85)';x.strokeText(String(n),S2/2,S2/2+6);
-  // Яркое неоновое свечение с чётким контуром символа.
-  x.shadowColor=col;
-  x.shadowBlur=12;
-  x.fillStyle=col;
-  x.fillText(String(n),S2/2,S2/2+6);
 
+  if(faceCache[key])return faceCache[key];
+
+  // Текстура без заливки фона:
+  // сквозь неё будет виден настоящий цвет открытой клетки.
+  const S2=256;
+  const cv=document.createElement('canvas');
+  cv.width=cv.height=S2;
+
+  const x=cv.getContext('2d');
+  if(!x)return null;
+
+  const col=NUM_COLORS[n-1]||'#FFFFFF';
+  const px=S2/2;
+  const py=S2/2+8;
+  const text=String(n);
+
+  x.clearRect(0,0,S2,S2);
+  x.font='900 208px Orbitron,Rajdhani,sans-serif';
+  x.textAlign='center';
+  x.textBaseline='middle';
+  x.lineJoin='round';
+
+  // Тёмная обводка сохраняет читаемость на любом фоне.
+  x.lineWidth=16;
+  x.strokeStyle='rgba(0,0,0,0.98)';
+  x.strokeText(text,px,py);
+
+  // Яркое неоновое свечение вокруг цифры.
+  x.shadowColor=col;
+  x.shadowBlur=28;
+  x.fillStyle=col;
+  x.fillText(text,px,py);
+
+  // Повторная заливка без размытия — чёткий контур символа.
   x.shadowBlur=0;
-  x.fillText(String(n),S2/2,S2/2+6);
-  const t=new THREE.CanvasTexture(cv);           // СВОЙ canvas — GPU не перетирает пиксели
-  t.minFilter=THREE.LinearMipmapLinearFilter;t.magFilter=THREE.LinearFilter; // v4.2: mipmaps + анизотропия — резче при уменьшении на больших полях
+  x.fillStyle=col;
+  x.fillText(text,px,py);
+
+  // Тонкий светлый внутренний контур для высокой контрастности.
+  x.lineWidth=2.5;
+  x.strokeStyle='rgba(255,255,255,0.95)';
+  x.strokeText(text,px,py);
+
+  const t=new THREE.CanvasTexture(cv);
+
+  t.minFilter=THREE.LinearMipmapLinearFilter;
+  t.magFilter=THREE.LinearFilter;
   t.generateMipmaps=true;
-  try{t.anisotropy=App.renderer?App.renderer.capabilities.getMaxAnisotropy():1;}catch(e){}
+
+  try{
+    t.anisotropy=App.renderer
+      ?App.renderer.capabilities.getMaxAnisotropy()
+      :1;
+  }catch(e){}
+
   if(THREE.sRGBEncoding)t.encoding=THREE.sRGBEncoding;
+
   t.needsUpdate=true;
-  return faceCache[key]=t;
+
+  faceCache[key]=t;
+  return t;
 }
 let numGeometry=null;
 /* v4.2 (ТЗ п.4): ПЕРЕИСПОЛЬЗУЕМЫЕ материалы цифр (по одному на значение 1..8).
@@ -1688,7 +1724,21 @@ let numGeometry=null;
    раньше clearNumbers() удалял материал каждого экземпляра при пересборке. */
 const numMatCache={};
 function getNumMat(n){
-  if(!numMatCache[n])numMatCache[n]=new THREE.MeshBasicMaterial({map:makeFaceTex(n),toneMapped:false}); // НЕ прозрачный — видно всегда
+  if(!numMatCache[n]){
+    const texture=makeFaceTex(n);
+    if(!texture)return null;
+
+    numMatCache[n]=new THREE.MeshBasicMaterial({
+      map:texture,
+      color:0xffffff,
+      transparent:true,
+      alphaTest:0.02,
+      depthWrite:false,
+      toneMapped:false,
+      side:THREE.DoubleSide
+    });
+  }
+
   return numMatCache[n];
 }
 /* ПОЛНАЯ очистка — только при перестройке поля (buildBoard) и рестарте. */
@@ -1722,7 +1772,10 @@ function ensureNumber(id){
       numGeometry.userData={sz:App.SZ};
       for(const m of App.numMap.values())m.geometry=numGeometry; // старые mesh переводим на новую геометрию
     }
-    const sp=new THREE.Mesh(numGeometry,getNumMat(v));
+    const material=getNumMat(v);
+    if(!material)return;
+
+    const sp=new THREE.Mesh(numGeometry,material);
     const p=cellPos(id);
     /* Накладка лежит НА тонкой пластине открытой клетки, запас против z-fighting. */
     sp.position.set(p.x,TOP_OPEN+openThick()*0.55+0.02,p.z);
@@ -2262,12 +2315,52 @@ function doFlag(id){
 }
 function doChord(id){tryChord(id);}
 function pulseTile(id){
-  if(!window.gsap)return;
-  const o={k:0};
-  gsap.to(o,{k:1,duration:0.3,onComplete:()=>syncTiles(),onUpdate:()=>{
-    const c=o.k>0.5?new THREE.Color(0x50121c):cHidden;setTile(id,TILE_HIDDEN,1,c);App.tiles.instanceMatrix.needsUpdate=true;
-  if(App.outlines){App.outlines.instanceMatrix.needsUpdate=true;}if(App.tiles.instanceColor)App.tiles.instanceColor.needsUpdate=true;
-  }});
+  const g=App.game;
+  if(!g||g.state[id]!==1||!App.tiles)return;
+
+  // Подсвечиваем только цвет уже открытой клетки.
+  // Её состояние и высота не меняются.
+  const base=cOpen.clone();
+  const flash=new THREE.Color(0x00ffff);
+
+  const apply=(t)=>{
+    // Не менять поле, если за время анимации началась новая игра
+    // или клетка больше не открыта.
+    if(App.game!==g||g.state[id]!==1)return;
+
+    const color=base.clone().lerp(flash,t);
+
+    // TILE_OPEN сохраняет геометрию открытой клетки.
+    setTile(id,TILE_OPEN,1,color);
+
+    App.tiles.instanceMatrix.needsUpdate=true;
+
+    if(App.outlines){
+      App.outlines.instanceMatrix.needsUpdate=true;
+    }
+
+    if(App.tiles.instanceColor){
+      App.tiles.instanceColor.needsUpdate=true;
+    }
+  };
+
+  if(window.gsap){
+    const animation={t:0};
+
+    gsap.to(animation,{
+      t:1,
+      duration:0.12,
+      repeat:1,
+      yoyo:true,
+      ease:'sine.inOut',
+      onUpdate:()=>apply(animation.t),
+      onComplete:()=>apply(0)
+    });
+  }else{
+    // Без GSAP не меняем высоту и состояние клетки.
+    apply(0.65);
+    setTimeout(()=>apply(0),160);
+  }
 }
 
 /* ================= [8] МАШИНА СОСТОЯНИЙ + HUD ================= */
@@ -2810,7 +2903,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-9";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-10";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
