@@ -1396,7 +1396,10 @@ function setDeco(mesh,id,on,lift,color,scl){
    (закрыта) → ещё более светлый куб (подсветка/peek) → тёмно-малиновый
    (мина). Соседние состояния различаются и по яркости, и по высоте. */
 const TILE_COLORS={
-  open:0x30445c,      // открытая клетка: тёмный графит (пластина вровень с полом)
+  /* visual-fix-9c: открытая клетка на тон темнее фона сцены (#121b2b),
+     чтобы пластины НЕ сливались с фоном и не выглядели «пустыми»;
+     закрытый куб остаётся самым светлым — контраст состояний усилен. */
+  open:0x2a3b52,      // открытая клетка: тёмный графит (пластина вровень с полом)
   hidden:0x718ba5,    // закрытая клетка: светлый стальной куб (заметно выше открытой)
   highlight:0xbdd4e8, // подсветка peek/наведения: самый светлый куб — явно отличается от обычного
   mine:0x6a1826,      // мина после поражения: тёмно-малиновый
@@ -2934,7 +2937,7 @@ function layout(){
 function ensureAudio(){const ac=audio();if(ac&&ac.state==='suspended')ac.resume();}
 
 /* ================= СТАРТ ================= */
-window.CYBERSWEEP_BUILD="visual-fix-9b";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
+window.CYBERSWEEP_BUILD="visual-fix-9c";console.log("[CyberSweep] build:",window.CYBERSWEEP_BUILD);
 window.addEventListener('error',e=>{ // последняя линия обороны: показываем ошибку вместо зависшего экрана
   const ld=document.getElementById('loader');
   if(ld&&App.state!=='MENU'&&App.state!=='PLAYING'){
