@@ -27,15 +27,17 @@ python tools/validate_levels.py
 
 ## Сборка Android
 
-Требуются JDK 17, Android SDK с платформой API 34 и установленный Gradle 8.x,
-совместимый с Android Gradle Plugin 8.5.2. В архиве нет Gradle Wrapper (`gradlew`),
-поэтому команда `./gradlew` сработает только после добавления Wrapper.
+Требуются JDK 17 и Android SDK с платформой API 34. Gradle Wrapper (Gradle 8.7,
+совместимый с Android Gradle Plugin 8.5.2) добавлен в репозиторий, поэтому сборка
+одинаково работает локально и в CI без установленного Gradle.
 
 ```bash
 cd android-app
 # При необходимости создайте local.properties со своим путём к Android SDK:
 # sdk.dir=/path/to/android-sdk
-gradle assembleRelease
+./gradlew clean
+./gradlew assembleDebug
+./gradlew assembleRelease   # Windows: gradlew.bat assembleRelease
 ```
 
 Результат обычно находится в `app/build/outputs/apk/release/app-release-unsigned.apk`

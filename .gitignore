@@ -1,8 +1,4 @@
 *.apk
-*.aab
-*.dex
-*.class
-*.jar
+!LastVersion/*.apk
+build_tmp/
 build/
-.gradle/
-local.properties
