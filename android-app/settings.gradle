@@ -1,4 +1,4 @@
-// CyberSweep — корневой настройки сборки
+// CyberSweep — корневые настройки сборки
 pluginManagement {
     repositories {
         google()
@@ -13,5 +13,6 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
+
 rootProject.name = "CyberSweep"
 include ':app'

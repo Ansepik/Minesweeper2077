@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.cybersweep.web"
+    android:versionCode="48"
+    android:versionName="4.9"
+    android:compileSdkVersion="34"
+    android:compileSdkVersionCodename="14">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application
+        android:label="CyberSweep"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@style/Theme.CyberSweep"
+        android:hardwareAccelerated="true"
+        android:allowBackup="true"
+        android:extractNativeLibs="false">
+        <activity
+            android:name="com.cybersweep.web.MainActivity"
+            android:exported="true"
+            android:screenOrientation="fullSensor"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
